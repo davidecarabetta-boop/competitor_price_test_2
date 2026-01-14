@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 import gspread
 
 # --- 1. CONFIGURAZIONE LOGO & UI ---
-LOGO_PATH = "logo-sensation.png" 
+LOGO_PATH = "logosensation.png" 
 
 st.set_page_config(
     page_title="Sensation Profumerie", 
