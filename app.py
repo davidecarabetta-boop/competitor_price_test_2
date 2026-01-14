@@ -1,100 +1,116 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from google.oauth2.service_account import Credentials
 import gspread
 
 # --- CONFIGURAZIONE UI ---
 st.set_page_config(page_title="Sensation Perfume Intelligence", layout="wide", page_icon="🧪")
 
-# Custom CSS per un look "Premium"
 st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
     .stMetric { background-color: #ffffff; border-radius: 10px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .css-1r6slb0 { border: 1px solid #e0e0e0; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONNESSIONE GOOGLE SHEETS ---
-@st.cache_data(ttl=3600) # Aggiorna la cache ogni ora
+# --- 1. FUNZIONE DI CARICAMENTO ROBUSTA ---
+@st.cache_data(ttl=3600)
 def load_data():
-    # Carica le credenziali dai "Secrets" di Streamlit/GitHub
-    scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-    client = gspread.authorize(creds)
-    
-    # Sostituisci con l'ID del tuo foglio
-    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1eIojQyXLuC1FO89ZGcswy4s8AgFX3xc1UuheFFgM6Kk/edit#gid=0").sheet1
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        # Usa i secrets configurati correttamente
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+        client = gspread.authorize(creds)
+        
+        # Apertura foglio tramite URL nei secrets
+        sheet = client.open_by_url(st.secrets["google_sheets"]["sheet_url"]).sheet1
+        
+        # get_all_values() evita l'errore "duplicate headers" di get_all_records()
+        raw_data = sheet.get_all_values()
+        
+        if not raw_data or len(raw_data) < 2:
+            return pd.DataFrame()
+            
+        # Trasformazione in DataFrame usando la prima riga come header
+        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+        
+        # Pulizia: rimuove colonne senza nome e spazi bianchi dai nomi colonne
+        df = df.loc[:, df.columns != '']
+        df.columns = df.columns.str.strip()
+        
+        return df
+    except Exception as e:
+        st.error(f"Errore di connessione a Google Sheets: {e}")
+        return pd.DataFrame()
 
-# --- LOGICA AI & NORMALIZZAZIONE ---
+# --- 2. LOGICA AI & NORMALIZZAZIONE ---
 def apply_ai_insights(df):
-    # Rilevamento Anomalie: se il prezzo è > 20% rispetto al minimo
-    df['Anomaly'] = df.apply(lambda x: "⚠️ Overpriced" if float(x['Sensation_Prezzo']) > (float(x['Comp_1_Prezzo']) * 1.2) else "✅ Ok", axis=1)
+    # Convertiamo i prezzi in numeri per i calcoli, gestendo eventuali errori
+    df['Sensation_Prezzo'] = pd.to_numeric(df['Sensation_Prezzo'], errors='coerce').fillna(0)
+    df['Comp_1_Prezzo'] = pd.to_numeric(df['Comp_1_Prezzo'], errors='coerce').fillna(0)
+    df['Sensation_Posizione'] = pd.to_numeric(df['Sensation_Posizione'], errors='coerce').fillna(0)
+
+    # Rilevamento Anomalie: se il prezzo è > 20% rispetto al minimo [cite: 16, 70]
+    df['Anomaly'] = df.apply(lambda x: "⚠️ Overpriced" if x['Sensation_Prezzo'] > (x['Comp_1_Prezzo'] * 1.2) and x['Comp_1_Prezzo'] > 0 else "✅ Ok", axis=1)
     
-    # Ottimizzazione Prezzo: suggerisce il prezzo per essere Rank 1 [cite: 74]
-    df['AI_Suggested_Price'] = df.apply(lambda x: float(x['Comp_1_Prezzo']) - 0.10 if float(x['Sensation_Posizione']) > 1 else x['Sensation_Prezzo'], axis=1)
+    # Ottimizzazione: suggerisce il prezzo per essere Rank 1 [cite: 74, 134]
+    df['AI_Suggested_Price'] = df.apply(lambda x: x['Comp_1_Prezzo'] - 0.10 if x['Sensation_Posizione'] > 1 and x['Comp_1_Prezzo'] > 0 else x['Sensation_Prezzo'], axis=1)
     
-    # Delta Profitto (semplificato)
-    df['Potential_Gain'] = df['Sensation_Prezzo'] - df['AI_Suggested_Price']
     return df
 
-# --- MAIN APP ---
-try:
-    df_raw = load_data()
-    df = apply_ai_insights(df_raw)
+# --- 3. ESECUZIONE E VALIDAZIONE ---
+df_raw = load_data()
 
-    st.title("🧪 Sensation Perfume Pricing Intelligence")
-    st.markdown("Analisi competitiva basata sui dati Alphaposition Premium [cite: 13, 14]")
+# CONTROLLO PRESENZA DATI
+if df_raw.empty:
+    st.warning("🕵️ Il database sembra vuoto. Verifica che lo script di sincronizzazione sia stato eseguito.")
+    st.stop()
 
-    # --- ROW 1: KPI CARDS ---
-    col1, col2, col3, col4 = st.columns(4)
-    
-    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100
-    avg_pos = df['Sensation_Posizione'].mean()
-    critical_items = df[df['Anomaly'] == "⚠️ Overpriced"].shape[0]
+# VALIDAZIONE COLONNE CRITICHE (Previene l'errore 'Sensation_Prezzo')
+colonne_necessarie = ['Sensation_Prezzo', 'Sensation_Posizione', 'Product', 'Comp_1_Prezzo']
+colonne_mancanti = [col for col in colonne_necessarie if col not in df_raw.columns]
 
-    col1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale di prodotti dove sei il primo prezzo")
-    col2.metric("Posizione Media", f"{avg_pos:.1f}", delta_color="inverse")
-    col3.metric("Prodotti Critici", critical_items, delta="-5", delta_color="normal")
-    col4.metric("Catalogo Monitorato", df.shape[0])
+if colonne_mancanti:
+    st.error(f"⚠️ Errore di struttura nel foglio Google!")
+    st.write(f"Mancano le colonne: **{', '.join(colonne_mancanti)}**")
+    st.info("Rinomina le colonne nel foglio Google o controlla lo script di sincronizzazione.")
+    st.stop()
 
-    st.divider()
+# Se passiamo la validazione, applichiamo l'AI
+df = apply_ai_insights(df_raw)
 
-    # --- ROW 2: VISUAL ANALYTICS ---
-    c1, c2 = st.columns([2, 1])
+# --- 4. MAIN DASHBOARD ---
+st.title("🧪 Sensation Perfume Pricing Intelligence")
+st.markdown("Monitoraggio competitivo via Alphaposition Premium [cite: 13, 14]")
 
-    with c1:
-        st.subheader("Analisi Prezzo: Sensation vs Miglior Competitor")
-        fig = px.bar(df.head(20), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
-                     barmode='group', labels={'value': 'Prezzo (€)', 'variable': 'Venditore'},
-                     color_discrete_sequence=['#1f77b4', '#ff7f0e'])
-        st.plotly_chart(fig, use_container_width=True)
+# ROW 1: KPI
+col1, col2, col3, col4 = st.columns(4)
+win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100
+avg_pos = df['Sensation_Posizione'].mean()
+critical_items = df[df['Anomaly'] == "⚠️ Overpriced"].shape[0]
 
-    with c2:
-        st.subheader("Distribuzione Posizionamento")
-        # Visualizza quante volte sei in Rank 1, 2, 3... [cite: 74]
-        fig_pie = px.pie(df, names='Sensation_Posizione', hole=.4, color_discrete_sequence=px.colors.sequential.RdBu)
-        st.plotly_chart(fig_pie, use_container_width=True)
+col1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti in posizione 1 [cite: 74]")
+col2.metric("Posizione Media", f"{avg_pos:.1f}")
+col3.metric("Prodotti Overpriced", critical_items)
+col4.metric("Catalogo Monitorato", df.shape[0])
 
-    # --- ROW 3: ACTIONABLE DATA TABLE ---
-    st.subheader("📋 Piano d'Azione AI & Dettaglio Prodotti")
-    
-    # Selettore per filtrare i critici
-    filter_choice = st.multiselect("Filtra per stato:", ["⚠️ Overpriced", "✅ Ok"], default=["⚠️ Overpriced", "✅ Ok"])
-    df_filtered = df[df['Anomaly'].isin(filter_choice)]
+st.divider()
 
-    st.dataframe(df_filtered[['Product', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Sensation_Posizione', 'Anomaly', 'AI_Suggested_Price']], 
-                 use_container_width=True,
-                 column_config={
-                     "Sensation_Prezzo": st.column_config.NumberColumn(format="%.2f €"),
-                     "Comp_1_Prezzo": st.column_config.NumberColumn(format="%.2f €"),
-                     "AI_Suggested_Price": st.column_config.NumberColumn("Prezzo Suggerito AI", format="%.2f €"),
-                     "Anomaly": st.column_config.TextColumn("Status")
-                 })
+# ROW 2: GRAFICI
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.subheader("Sensation vs Miglior Competitor [cite: 16, 70]")
+    fig = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
+                 barmode='group', color_discrete_sequence=['#1f77b4', '#ff7f0e'])
+    st.plotly_chart(fig, use_container_width=True)
 
-except Exception as e:
-    st.error(f"Configura le credenziali di Google Sheets nei Secret! Errore: {e}")
+with c2:
+    st.subheader("Distribuzione Rank [cite: 74]")
+    fig_pie = px.pie(df, names='Sensation_Posizione', hole=.4)
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+# ROW 3: TABELLA DETTAGLIO
+st.subheader("📋 Analisi Dettagliata e Suggerimenti AI")
+st.dataframe(df[['Product', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Sensation_Posizione', 'Anomaly', 'AI_Suggested_Price']], 
+             use_container_width=True)
