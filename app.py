@@ -102,6 +102,24 @@ with tab1:
     st.subheader("📋 Tabella Riepilogativa Attuale")
     st.dataframe(df[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Comp_1_Prezzo']], use_container_width=True, hide_index=True)
 
+# Calcolo Indice di Competitività (PI)
+# 100 = Allineato al minimo, >100 = Più caro del minimo
+df_display['Price_Index'] = (df_display['Sensation_Prezzo'] / df_display['Comp_1_Prezzo']) * 100
+
+# Formattazione per la tabella
+st.dataframe(
+    df_display[['Sku', 'Product', 'Sensation_Posizione', 'Price_Index', 'Analisi AI']],
+    column_config={
+        "Price_Index": st.column_config.ProgressColumn(
+            "Indice Competitività",
+            help="100% significa che sei il primo prezzo",
+            format="%.1f",
+            min_value=80,
+            max_value=150,
+        )
+    }
+)
+
 # --- TAB 2: FOCUS PRODOTTO (REINTEGRATA) ---
 with tab2:
     st.subheader("🔍 Analisi Storica e Dettaglio Competitor")
