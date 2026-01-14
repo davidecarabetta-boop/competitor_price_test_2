@@ -91,8 +91,7 @@ if selected_brands:
 # --- 5. DASHBOARD (TABS) ---
 tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
 
-
- with tab1:
+with tab1:
        # KPI - Integrazione Buy Box Win Rate basata sulla posizione delle offerte 
     c1, c2, c3, c4 = st.columns(4)
     win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100 if len(df) > 0 else 0
