@@ -11,7 +11,7 @@ import json
 # Assicurati che gemini_api_key sia nei Secrets di Streamlit
 genai.configure(api_key=st.secrets["gemini_api_key"])
 # Utilizziamo gemini-1.5-flash per velocità e costi ridotti
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- CONFIGURAZIONE UI ---
 LOGO_PATH = "logosensation.png" 
