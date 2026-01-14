@@ -91,8 +91,28 @@ if selected_brands:
 # --- 5. DASHBOARD (TABS) ---
 tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
 
-with tab1:
+
  with tab1:
+       # KPI - Integrazione Buy Box Win Rate basata sulla posizione delle offerte 
+    c1, c2, c3, c4 = st.columns(4)
+    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100 if len(df) > 0 else 0
+    c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti con Rank 1 ")
+    c2.metric("Posizione Media", f"{df['Sensation_Posizione'].mean():.1f}")
+    c3.metric("Prezzo Sensation Medio", f"{df['Sensation_Prezzo'].mean():.2f}€")
+    c4.metric("SKU Monitorati", len(df))
+
+    col_left, col_right = st.columns([2, 1])
+    with col_left:
+        st.subheader("Confronto Prezzi: Noi vs Competitor Rank 1")
+        fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
+                         labels={'value': 'Euro (€)', 'variable': 'Venditore'},
+                         barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+    with col_right:
+        st.subheader("Distribuzione Posizioni (Rank)")
+        fig_donut = px.pie(df, names='Sensation_Posizione', hole=0.5)
+        st.plotly_chart(fig_donut, use_container_width=True)
     # ... (Mantieni i KPI e i grafici esistenti qui) ...
 
     st.divider()
