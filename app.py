@@ -7,25 +7,25 @@ import gspread
 import base64
 
 # --- CONFIGURAZIONE LOGO & UI ---
-# Definiamo l'SVG come una stringa pulita
-SENSATION_LOGO_SVG = """
-<svg width="200" height="60" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
-    <rect width="200" height="60" fill="#0056b3" rx="10"/>
-    <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="24" fill="white">SENSATION</text>
-</svg>
-"""
+# Specifichiamo il percorso del file immagine
+LOGO_PATH = "logo-sensation.png" 
 
-# Funzione per convertire l'SVG in un formato leggibile dal browser come icona
-def get_svg_data_uri(svg_str):
-    b64 = base64.b64encode(svg_str.encode('utf-8')).decode('utf-8')
-    return f"data:image/svg+xml;base64,{b64}"
-
-# Configurazione della pagina: il logo Sensation sostituisce la siringa
 st.set_page_config(
     page_title="Sensation Perfume Intelligence", 
     layout="wide", 
-    page_icon=get_svg_data_uri(SENSATION_LOGO_SVG)
+    page_icon=LOGO_PATH # Ora usa il file come icona della tab del browser
 )
+
+# ... caricamento dati e logica ...
+
+# --- 2. SIDEBAR CON IMMAGINE ---
+with st.sidebar:
+    # Carica l'immagine dal file locale
+    # 'use_container_width=True' adatta l'immagine alla larghezza della sidebar
+    st.image(LOGO_PATH, use_container_width=True)
+    
+    st.header("🛒 Filtri Catalogo")
+    # ... resto dei filtri ...
 
 # Custom CSS Premium
 st.markdown("""
