@@ -14,7 +14,6 @@ st.set_page_config(
     page_icon=LOGO_PATH
 )
 
-# Custom CSS per rifinire l'interfaccia (Mix delle due UI fornite)
 st.markdown("""
     <style>
     .stSidebar { background-color: #f8f9fa; border-right: 1px solid #eee; }
@@ -30,7 +29,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CARICAMENTO DATI (DB GOOGLE SHEETS) ---
+# --- 2. CARICAMENTO DATI ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -42,154 +41,129 @@ def load_data():
         
         if not raw_data: return pd.DataFrame()
         
-        # Mapping colonne: Data, Product, Sku, Sensation_Posizione, Sensation_Prezzo, 
-        # Comp_rank_1, Comp_1_Prezzo, Comp_rank_2, Comp_2_prezzo
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         df.columns = df.columns.str.strip()
         
-        # Pulizia e conversione numerica
+        # Pulizia e conversione numerica per i calcoli [cite: 65, 68, 70]
         numeric_cols = ['Sensation_Prezzo', 'Sensation_Posizione', 'Comp_1_Prezzo', 'Comp_2_prezzo']
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].replace('[\€,]', '', regex=True).replace('', '0'), errors='coerce').fillna(0)
         
+        # Conversione data per isolare l'ultimo snapshot [cite: 118]
+        df['Data_dt'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
+        
         return df
     except Exception as e:
-        st.error(f"Errore caricamento database: {e}")
+        st.error(f"Errore database: {e}")
         return pd.DataFrame()
 
 df_raw = load_data()
 
-# --- 3. SIDEBAR ---
+# --- 3. LOGICA DI FILTRAGGIO (SOLO ULTIMA DATA PER OVERVIEW) ---
+if not df_raw.empty:
+    # Identifichiamo l'ultimo giorno di rilevazione nel database 
+    ultima_data = df_raw['Data_dt'].max()
+    # df_latest contiene solo i dati di oggi per i KPI e la tabella
+    df_latest = df_raw[df_raw['Data_dt'] == ultima_data].copy()
+else:
+    st.stop()
+
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    # Caricamento immagine locale
     try:
         st.image(LOGO_PATH, use_container_width=True)
     except:
-        st.warning("Immagine 'logo-sensation.png' non trovata. Caricala nella cartella principale.")
+        st.warning("Carica 'logosensation.png' su GitHub")
     
     st.header("🛒 Filtri Catalogo")
-    
-    # Filtro Brand (estratto dal primo termine del nome prodotto)
-    brand_list = sorted(df_raw['Product'].str.split().str[0].unique()) if not df_raw.empty else []
+    brand_list = sorted(df_latest['Product'].str.split().str[0].unique())
     selected_brands = st.multiselect("Filtra per Brand", brand_list)
     
     st.divider()
-    if st.button("🔄 Aggiorna Dati GSheet"):
+    if st.button("🔄 Aggiorna Dati"):
         st.cache_data.clear()
         st.rerun()
 
-# --- 4. VALIDAZIONE E LOGICA ---
-if df_raw.empty:
-    st.warning("In attesa di dati dalla sincronizzazione Alphaposition Premium...")
-    st.stop()
-
-df = df_raw.copy()
+# Applicazione filtri sidebar
+df = df_latest.copy()
 if selected_brands:
     df = df[df['Product'].str.startswith(tuple(selected_brands))]
 
-# --- 5. DASHBOARD (TABS) ---
+# --- 5. DASHBOARD ---
 tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
 
 with tab1:
-       # KPI - Integrazione Buy Box Win Rate basata sulla posizione delle offerte 
+    # KPI REALI (Calcolati solo sull'ultima data) [cite: 15, 74]
     c1, c2, c3, c4 = st.columns(4)
-    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100 if len(df) > 0 else 0
-    c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti con Rank 1 ")
+    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / len(df)) * 100 if len(df) > 0 else 0
+    
+    c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti Rank 1 oggi")
     c2.metric("Posizione Media", f"{df['Sensation_Posizione'].mean():.1f}")
     c3.metric("Prezzo Sensation Medio", f"{df['Sensation_Prezzo'].mean():.2f}€")
     c4.metric("SKU Monitorati", len(df))
 
-    col_left, col_right = st.columns([2, 1])
-    with col_left:
-        st.subheader("Confronto Prezzi: Noi vs Competitor Rank 1")
+    st.divider()
+
+    col_l, col_r = st.columns([2, 1])
+    with col_l:
+        st.subheader("Confronto Prezzi: Noi vs Miglior Competitor")
         fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
-                         labels={'value': 'Euro (€)', 'variable': 'Venditore'},
                          barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
         st.plotly_chart(fig_bar, use_container_width=True)
         
-    with col_right:
-        st.subheader("Distribuzione Posizioni (Rank)")
+    with col_r:
+        st.subheader("Distribuzione Rank")
         fig_donut = px.pie(df, names='Sensation_Posizione', hole=0.5)
         st.plotly_chart(fig_donut, use_container_width=True)
-    # ... (Mantieni i KPI e i grafici esistenti qui) ...
 
     st.divider()
     
-    # --- NUOVA SEZIONE: TABELLA RIEPILOGATIVA BRAND ---
+    # --- TABELLA RIEPILOGATIVA BRAND ---
     st.subheader(f"📋 Riepilogo Dettagliato Prodotti")
-    
-    if not df.empty:
-        # Creiamo una copia per la visualizzazione e calcoliamo il Gap
-        df_display = df.copy()
-        
-        # Calcolo del Gap Prezzo rispetto al Rank 1 per dare valore AI
-        df_display['Gap_vs_Migliore'] = df_display['Sensation_Prezzo'] - df_display['Comp_1_Prezzo']
-        
-        # Definiamo uno stato visivo rapido
-        df_display['Status'] = df_display.apply(
-            lambda x: "✅ Leader" if x['Sensation_Posizione'] == 1 
-            else ("⚠️ Allineare" if x['Gap_vs_Migliore'] < 2 else "❌ Fuori Mercato"), axis=1
-        )
+    df_display = df.copy()
+    df_display['Gap_vs_Migliore'] = df_display['Sensation_Prezzo'] - df_display['Comp_1_Prezzo']
+    df_display['Analisi AI'] = df_display.apply(
+        lambda x: "✅ Leader" if x['Sensation_Posizione'] == 1 else "⚠️ Da Revisionare", axis=1
+    )
 
-        # Configurazione colonne per un look professionale
-        st.dataframe(
-            df_display[[
-                'Data', 'Sku', 'Product', 'Sensation_Posizione', 
-                'Sensation_Prezzo', 'Comp_1_Prezzo', 'Gap_vs_Migliore', 'Status'
-            ]],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Data": st.column_config.TextColumn("Data Rilevazione"),
-                "Sku": st.column_config.TextColumn("SKU"),
-                "Product": st.column_config.TextColumn("Prodotto", width="large"),
-                "Sensation_Posizione": st.column_config.NumberColumn("Rank TP", help="Posizione su Trovaprezzi "),
-                "Sensation_Prezzo": st.column_config.NumberColumn("Tuo Prezzo", format="%.2f €"),
-                "Comp_1_Prezzo": st.column_config.NumberColumn("Miglior Competitor", format="%.2f €"),
-                "Gap_vs_Migliore": st.column_config.NumberColumn("Gap (€)", format="%.2f €"),
-                "Status": st.column_config.TextColumn("Analisi AI")
-            }
-        )
-    else:
-        st.info("Seleziona un Brand nella sidebar per vedere il riepilogo.")
+    st.dataframe(
+        df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Gap_vs_Migliore', 'Analisi AI']],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Sensation_Prezzo": st.column_config.NumberColumn("Tuo Prezzo", format="%.2f €"),
+            "Comp_1_Prezzo": st.column_config.NumberColumn("Miglior Competitor", format="%.2f €"),
+            "Gap_vs_Migliore": st.column_config.NumberColumn("Gap (€)", format="%.2f €"),
+            "Sensation_Posizione": st.column_config.NumberColumn("Rank TP")
+        }
+    )
+
 with tab2:
     st.subheader("Analisi Storica e Competitor")
-    product_selected = st.selectbox("Seleziona Profumo:", df['Product'].unique())
+    product_selected = st.selectbox("Seleziona Profumo:", df_latest['Product'].unique())
     
-    p_data = df[df['Product'] == product_selected].iloc[0]
-    hist_data = df_raw[df_raw['Product'] == product_selected].sort_values('Data')
+    p_data = df_latest[df_latest['Product'] == product_selected].iloc[0]
+    # Qui usiamo df_raw per vedere l'andamento nel tempo [cite: 116]
+    hist_data = df_raw[df_raw['Product'] == product_selected].sort_values('Data_dt')
 
     col_card, col_chart = st.columns([1, 2])
     
     with col_card:
-        # Scheda Prodotto (Dalla seconda interfaccia)
         st.markdown(f"""
             <div class="product-card">
-                <h4 style="margin-top:0;">{product_selected}</h4>
+                <h4>{product_selected}</h4>
                 <p><b>SKU:</b> {p_data['Sku']}</p>
-                <p><b>Posizione Attuale:</b> {p_data['Sensation_Posizione']:.0f}° </p>
+                <p><b>Posizione Attuale:</b> {p_data['Sensation_Posizione']:.0f}°</p>
                 <hr>
-                <h2 style="color: #0056b3; margin-bottom:0;">{p_data['Sensation_Prezzo']:.2f} €</h2>
-                <p style="color: green; font-weight: bold;">In Stock</p>
+                <h2 style="color: #0056b3;">{p_data['Sensation_Prezzo']:.2f} €</h2>
             </div>
         """, unsafe_allow_html=True)
         
     with col_chart:
-        # Monitoraggio storico dei prezzi e posizionamento 
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Sensation_Prezzo'], name='Sensation', line=dict(color='#0056b3', width=4)))
         fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_1_Prezzo'], name=f"1°: {p_data['Comp_rank_1']}", line=dict(dash='dash', color='#ffa500')))
-        fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_2_prezzo'], name=f"2°: {p_data['Comp_rank_2']}", line=dict(dash='dot', color='#d62728')))
         
-        fig_trend.update_layout(title="Andamento Storico Prezzi (€) ", hovermode="x unified")
+        fig_trend.update_layout(title="Andamento Storico Prezzi (€)", hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
-
-    # Dettaglio posizionamento dei competitor rilevati dall'API 
-    st.subheader("Benchmark Competitor Diretti")
-    comp_table = pd.DataFrame({
-        "Posizione": ["1°", "2°"],
-        "Merchant": [p_data['Comp_rank_1'], p_data['Comp_rank_2']],
-        "Prezzo": [f"{p_data['Comp_1_Prezzo']:.2f} €", f"{p_data['Comp_2_prezzo']:.2f} €"]
-    })
-    st.table(comp_table)
