@@ -81,7 +81,7 @@ with st.sidebar:
 
 # --- 4. VALIDAZIONE E LOGICA ---
 if df_raw.empty:
-    st.warning("In attesa di dati dalla sincronizzazione Alphaposition Premium... [cite: 13]")
+    st.warning("In attesa di dati dalla sincronizzazione Alphaposition Premium...")
     st.stop()
 
 df = df_raw.copy()
@@ -176,16 +176,16 @@ with tab2:
         """, unsafe_allow_html=True)
         
     with col_chart:
-        # Monitoraggio storico dei prezzi e posizionamento [cite: 15, 16]
+        # Monitoraggio storico dei prezzi e posizionamento 
         fig_trend = go.Figure()
         fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Sensation_Prezzo'], name='Sensation', line=dict(color='#0056b3', width=4)))
         fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_1_Prezzo'], name=f"1°: {p_data['Comp_rank_1']}", line=dict(dash='dash', color='#ffa500')))
         fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_2_prezzo'], name=f"2°: {p_data['Comp_rank_2']}", line=dict(dash='dot', color='#d62728')))
         
-        fig_trend.update_layout(title="Andamento Storico Prezzi (€) [cite: 16]", hovermode="x unified")
+        fig_trend.update_layout(title="Andamento Storico Prezzi (€) ", hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
 
-    # Dettaglio posizionamento dei competitor rilevati dall'API [cite: 87, 88]
+    # Dettaglio posizionamento dei competitor rilevati dall'API 
     st.subheader("Benchmark Competitor Diretti")
     comp_table = pd.DataFrame({
         "Posizione": ["1°", "2°"],
