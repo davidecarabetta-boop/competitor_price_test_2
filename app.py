@@ -1,116 +1,137 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from google.oauth2.service_account import Credentials
 import gspread
 
 # --- CONFIGURAZIONE UI ---
-st.set_page_config(page_title="Sensation Perfume Intelligence", layout="wide")
+st.set_page_config(page_title="Sensation Perfume Intelligence", layout="wide", page_icon="🧪")
 
+# Custom CSS per Sidebar e Card
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; border-radius: 10px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stSidebar { background-color: #f8f9fa; }
+    .product-card { background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; }
+    .metric-container { background-color: #ffffff; border-radius: 10px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. FUNZIONE DI CARICAMENTO ROBUSTA ---
-@st.cache_data(ttl=3600)
+# --- 1. CARICAMENTO DATI ---
+@st.cache_data(ttl=600)
 def load_data():
     try:
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-        # Usa i secrets configurati correttamente
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         client = gspread.authorize(creds)
-        
-        # Apertura foglio tramite URL nei secrets
         sheet = client.open_by_url(st.secrets["google_sheets"]["sheet_url"]).sheet1
-        
-        # get_all_values() evita l'errore "duplicate headers" di get_all_records()
         raw_data = sheet.get_all_values()
         
-        if not raw_data or len(raw_data) < 2:
-            return pd.DataFrame()
-            
-        # Trasformazione in DataFrame usando la prima riga come header
-        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+        if not raw_data: return pd.DataFrame()
         
-        # Pulizia: rimuove colonne senza nome e spazi bianchi dai nomi colonne
-        df = df.loc[:, df.columns != '']
+        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         df.columns = df.columns.str.strip()
+        
+        # Conversione Numerica secondo i tuoi nuovi nomi colonna
+        numeric_cols = ['Sensation_Prezzo', 'Sensation_Posizione', 'Comp_1_Prezzo', 'Comp_2_prezzo']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].replace('[\€,]', '', regex=True).replace('', '0'), errors='coerce').fillna(0)
         
         return df
     except Exception as e:
-        st.error(f"Errore di connessione a Google Sheets: {e}")
+        st.error(f"Errore caricamento: {e}")
         return pd.DataFrame()
 
-# --- 2. LOGICA AI & NORMALIZZAZIONE ---
-def apply_ai_insights(df):
-    # Convertiamo i prezzi in numeri per i calcoli, gestendo eventuali errori
-    df['Sensation_Prezzo'] = pd.to_numeric(df['Sensation_Prezzo'], errors='coerce').fillna(0)
-    df['Comp_1_Prezzo'] = pd.to_numeric(df['Comp_1_Prezzo'], errors='coerce').fillna(0)
-    df['Sensation_Posizione'] = pd.to_numeric(df['Sensation_Posizione'], errors='coerce').fillna(0)
-
-    # Rilevamento Anomalie: se il prezzo è > 20% rispetto al minimo 
-    df['Anomaly'] = df.apply(lambda x: "⚠️ Overpriced" if x['Sensation_Prezzo'] > (x['Comp_1_Prezzo'] * 1.2) and x['Comp_1_Prezzo'] > 0 else "✅ Ok", axis=1)
-    
-    # Ottimizzazione: suggerisce il prezzo per essere Rank 1 
-    df['AI_Suggested_Price'] = df.apply(lambda x: x['Comp_1_Prezzo'] - 0.10 if x['Sensation_Posizione'] > 1 and x['Comp_1_Prezzo'] > 0 else x['Sensation_Prezzo'], axis=1)
-    
-    return df
-
-# --- 3. ESECUZIONE E VALIDAZIONE ---
 df_raw = load_data()
 
-# CONTROLLO PRESENZA DATI
+# --- 2. SIDEBAR (FILTRI & AGGIORNAMENTO) ---
+with st.sidebar:
+    st.image("https://www.sensationprofumerie.it/logo.png", width=200) # Placeholder logo
+    st.header("Filtri Avanzati")
+    
+    # Simuliamo Categoria e Brand se non presenti esplicitamente nel DB per ora
+    brand_list = sorted(df_raw['Product'].str.split().str[0].unique()) if not df_raw.empty else []
+    selected_brands = st.multiselect("Filtra per Brand", brand_list)
+    
+    st.divider()
+    if st.button("🔄 Aggiorna Dati GSheet"):
+        st.cache_data.clear()
+        st.rerun()
+
+# --- 3. VALIDAZIONE E FILTRO ---
 if df_raw.empty:
-    st.warning("🕵️ Il database sembra vuoto. Verifica che lo script di sincronizzazione sia stato eseguito.")
+    st.warning("Database vuoto o non raggiungibile.")
     st.stop()
 
-# VALIDAZIONE COLONNE CRITICHE (Previene l'errore 'Sensation_Prezzo')
-colonne_necessarie = ['Sensation_Prezzo', 'Sensation_Posizione', 'Product', 'Comp_1_Prezzo']
-colonne_mancanti = [col for col in colonne_necessarie if col not in df_raw.columns]
+# Filtriamo i dati in base alla sidebar
+df = df_raw.copy()
+if selected_brands:
+    df = df[df['Product'].str.startswith(tuple(selected_brands))]
 
-if colonne_mancanti:
-    st.error(f"⚠️ Errore di struttura nel foglio Google!")
-    st.write(f"Mancano le colonne: **{', '.join(colonne_mancanti)}**")
-    st.info("Rinomina le colonne nel foglio Google o controlla lo script di sincronizzazione.")
-    st.stop()
+# --- 4. DASHBOARD PRINCIPALE (MIX INTERFACCE) ---
+tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Analisi Singolo Prodotto"])
 
-# Se passiamo la validazione, applichiamo l'AI
-df = apply_ai_insights(df_raw)
+with tab1:
+    # KPI iniziali
+    c1, c2, c3, c4 = st.columns(4)
+    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100 if not df.empty else 0
+    c1.metric("Win Rate", f"{win_rate:.1f}%")
+    c2.metric("Posizione Media", f"{df['Sensation_Posizione'].mean():.1f}")
+    c3.metric("Prezzo Medio", f"{df['Sensation_Prezzo'].mean():.2f}€")
+    c4.metric("Prodotti", len(df))
 
-# --- 4. MAIN DASHBOARD ---
-st.title("🧪 Sensation Perfume Pricing Intelligence")
-st.markdown("Monitoraggio competitivo via Alphaposition Premium ")
+    # Grafici Globali (dalla prima interfaccia)
+    col_left, col_right = st.columns([2, 1])
+    with col_left:
+        st.subheader("Sensation vs Miglior Competitor")
+        fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
+                         barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+    with col_right:
+        st.subheader("Distribuzione Rank")
+        fig_donut = px.pie(df, names='Sensation_Posizione', hole=0.5, 
+                           color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig_donut, use_container_width=True)
 
-# ROW 1: KPI
-col1, col2, col3, col4 = st.columns(4)
-win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100
-avg_pos = df['Sensation_Posizione'].mean()
-critical_items = df[df['Anomaly'] == "⚠️ Overpriced"].shape[0]
+with tab2:
+    # Sezione Dettaglio (dalla seconda interfaccia)
+    st.subheader("Deep Dive Prodotto")
+    product_selected = st.selectbox("Seleziona un profumo per l'analisi storica:", df['Product'].unique())
+    
+    p_data = df[df['Product'] == product_selected].iloc[0]
+    hist_data = df_raw[df_raw['Product'] == product_selected].sort_values('Data')
 
-col1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti in posizione 1")
-col2.metric("Posizione Media", f"{avg_pos:.1f}")
-col3.metric("Prodotti Overpriced", critical_items)
-col4.metric("Catalogo Monitorato", df.shape[0])
+    col_card, col_chart = st.columns([1, 2])
+    
+    with col_card:
+        st.markdown(f"""
+            <div class="product-card">
+                <h3>Dettagli Prodotto</h3>
+                <p><b>SKU:</b> {p_data['Sku']}</p>
+                <p><b>Posizione:</b> {p_data['Sensation_Posizione']:.0f}°</p>
+                <hr>
+                <h2 style="color: #0056b3;">{p_data['Sensation_Prezzo']:.2f} €</h2>
+                <p style="color: green;">In Stock</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    with col_chart:
+        # Trend Storico Prezzi
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Sensation_Prezzo'], name='Sensation (Noi)', line=dict(color='#0056b3', width=3)))
+        fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_1_Prezzo'], name=p_data['Comp_rank_1'], line=dict(dash='dash', color='#ffa500')))
+        fig_trend.add_trace(go.Scatter(x=hist_data['Data'], y=hist_data['Comp_2_prezzo'], name=p_data['Comp_rank_2'], line=dict(dash='dot', color='#d62728')))
+        
+        fig_trend.update_layout(title="Andamento Storico Prezzi (€)", xaxis_title="Data", yaxis_title="Prezzo")
+        st.plotly_chart(fig_trend, use_container_width=True)
 
-st.divider()
-
-# ROW 2: GRAFICI
-c1, c2 = st.columns([2, 1])
-with c1:
-    st.subheader("Sensation vs Miglior Competitor")
-    fig = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
-                 barmode='group', color_discrete_sequence=['#1f77b4', '#ff7f0e'])
-    st.plotly_chart(fig, use_container_width=True)
-
-with c2:
-    st.subheader("Distribuzione Rank")
-    fig_pie = px.pie(df, names='Sensation_Posizione', hole=.4)
-    st.plotly_chart(fig_pie, use_container_width=True)
-
-# ROW 3: TABELLA DETTAGLIO
-st.subheader("📋 Analisi Dettagliata e Suggerimenti AI")
-st.dataframe(df[['Product', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Sensation_Posizione', 'Anomaly', 'AI_Suggested_Price']], 
-             use_container_width=True)
+    # Tabella Competitor (Parte bassa della seconda interfaccia)
+    st.subheader("Posizionamento Prezzi Competitor")
+    comp_table = pd.DataFrame({
+        "Merchant": [p_data['Comp_rank_1'], p_data['Comp_rank_2']],
+        "Prezzo": [p_data['Comp_1_Prezzo'], p_data['Comp_2_prezzo']],
+        "Rank": [1, 2]
+    })
+    st.table(comp_table)
