@@ -8,6 +8,7 @@ import google.generativeai as genai
 import json
 
 # --- 1. CONFIGURAZIONE AI ---
+# Utilizziamo la chiave dai secrets di Streamlit per sicurezza
 genai.configure(api_key=st.secrets["gemini_api_key"])
 model = genai.GenerativeModel('gemini-1.5-flash')
 
@@ -29,7 +30,7 @@ def load_data():
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         df.columns = df.columns.str.strip()
         
-        # Sincronizzazione SKU (Logica Colab)
+        # LOGICA TESTATA: Sincronizzazione SKU come stringa pulita
         df['Sku'] = df['Sku'].astype(str).str.strip()
 
         # Pulizia Prezzi e Rank
@@ -48,11 +49,14 @@ def load_data():
 
 df_raw = load_data()
 
-# --- 3. FUNZIONI AI (Logica Colab Blindata) ---
+# --- 3. FUNZIONI AI INTEGRATE (LOGICA COLAB) ---
 
 def ai_clustering_bulk(df_input):
-    """Analisi di massa per la Tabella Generale"""
+    """Analisi di massa per la Tabella (Logica Colab Snippet 1)"""
+    # Prendiamo i primi 30 per stabilità e velocità
     data_to_send = df_input.head(30)[['Sku', 'Product', 'Sensation_Prezzo', 'Comp_1_Prezzo']].to_dict(orient='records')
+    
+    # FIX TESTATO: Doppie graffe {{ }} per f-string
     prompt = f"""
     Analizza questi prodotti: {json.dumps(data_to_send)}.
     Classificali come 'Prodotto Civetta' o 'Prodotto a Margine'.
@@ -61,42 +65,49 @@ def ai_clustering_bulk(df_input):
     """
     try:
         response = model.generate_content(prompt)
-        res_text = response.text.strip()
-        if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0].strip()
-        ai_data = json.loads(res_text)
-        df_ai = pd.DataFrame(ai_data)
-        if not df_ai.empty: df_ai.columns = [c.strip().capitalize() for c in df_ai.columns]
-        return df_ai
-    except: return pd.DataFrame()
+        raw_text = response.text.strip()
+        
+        # Pulizia JSON testata su Colab
+        if "```json" in raw_text:
+            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_text:
+            raw_text = raw_text.split("```")[1].split("```")[0].strip()
+
+        ai_data = json.loads(raw_text)
+        return pd.DataFrame(ai_data)
+    except Exception as e:
+        return pd.DataFrame()
 
 def ai_predictive_strategy(hist_data, p_data):
-    """Analisi Predittiva e Churn Competitor per Tab 2"""
-    # Analizziamo gli ultimi 10 rilevamenti per capire il trend
+    """Analisi Predittiva (Logica Colab Snippet 2)"""
+    # Analizziamo gli ultimi 10 record (punto dolce tra precisione e velocità)
     trend = hist_data.tail(10)[['Data', 'Sensation_Prezzo', 'Comp_1_Prezzo']].to_string()
     
     prompt = f"""
-    Analizza il trend di {p_data['Product']}.
-    Dati attuali: Sensation {p_data['Sensation_Prezzo']}€, Competitor {p_data['Comp_1_Prezzo']}€.
-    Storico recente:
+    Analizza il trend di mercato per: {p_data['Product']}.
+    Situazione attuale: Sensation {p_data['Sensation_Prezzo']}€ (1°), Competitor {p_data['Comp_1_Prezzo']}€.
+    
+    Storico ultimi 10 rilevamenti:
     {trend}
     
     Compito:
-    1. Prevedi se il competitor sta esaurendo le scorte (es. se il suo prezzo sale costantemente o sparisce).
-    2. Suggerisci la mossa di prezzo per domani per massimizzare il profitto.
-    Rispondi in max 40 parole in modo molto diretto.
+    1. Il competitor sta finendo le scorte? (Analizza se il suo prezzo sale in modo anomalo).
+    2. Qual è la mossa esatta per domani? (Es. aumentare il prezzo per recuperare margine).
+    Rispondi in max 40 parole.
     """
     try:
         response = model.generate_content(prompt)
         return response.text
-    except:
-        return "Analisi predittiva non disponibile al momento."
+    except Exception as e:
+        return f"Analisi non disponibile: {e}"
 
 # --- 4. SIDEBAR ---
 if df_raw.empty: st.stop()
 df_latest = df_raw.sort_values('Data_dt', ascending=True).drop_duplicates('Sku', keep='last').copy()
 
 with st.sidebar:
-    st.image(LOGO_PATH, use_container_width=True)
+    try: st.image(LOGO_PATH, use_container_width=True)
+    except: st.info("Sensation Intelligence")
     st.header("🤖 AI Strategy Control")
     brand_list = sorted(df_raw['Product'].str.split().str[0].unique())
     selected_brands = st.multiselect("Filtra per Brand", brand_list)
@@ -112,8 +123,9 @@ if selected_brands:
 # --- 5. DASHBOARD ---
 tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 Previsione & Focus Item"])
 
+# --- TAB 1: OVERVIEW & Azione ---
 with tab1:
-    # KPI
+    # KPI Quadranti
     c1, c2, c3, c4 = st.columns(4)
     win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / len(df)) * 100 if len(df) > 0 else 0
     c1.metric("Win Rate", f"{win_rate:.1f}%")
@@ -123,16 +135,18 @@ with tab1:
 
     st.divider()
 
-    # GRAFICI
+    # Grafici Noi vs Competitor
     col_l, col_r = st.columns([2, 1])
     with col_l:
-        st.plotly_chart(px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], barmode='group'), use_container_width=True)
+        fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
+                         barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
+        st.plotly_chart(fig_bar, use_container_width=True)
     with col_r:
         st.plotly_chart(px.pie(df, names='Sensation_Posizione', hole=0.5), use_container_width=True)
 
     st.divider()
 
-    # TABELLA CLUSTERING
+    # TABELLA CLUSTERING (Logica Merge Colab)
     st.subheader("📋 Piano d'Azione AI")
     df_display = df.copy()
     df_display['Gap %'] = df_display.apply(lambda x: ((x['Sensation_Prezzo'] / x['Comp_1_Prezzo']) - 1) * 100 if x['Comp_1_Prezzo'] > 0 else 0, axis=1)
@@ -140,16 +154,17 @@ with tab1:
     
     if run_clustering:
         with st.spinner("L'AI sta analizzando i prodotti..."):
+            # Chiamata alla funzione testata su Colab
             results = ai_clustering_bulk(df_display)
             if not results.empty:
+                # Sincronizzazione SKU e Merge (Logica Colab)
                 results['Sku'] = results['Sku'].astype(str).str.strip()
                 df_display = df_display.merge(results[['Sku', 'Categoria']], on='Sku', how='left')
-                if 'Categoria' not in df_display.columns: df_display['Categoria'] = None
+                df_display['Classificazione AI'] = df_display['Categoria'].fillna("Analisi non prioritaria")
             else:
-                df_display['Categoria'] = None
-            df_display['Classificazione AI'] = df_display['Categoria'].fillna("Analisi non prioritaria")
+                df_display['Classificazione AI'] = "❌ Errore risposta AI"
     else:
-        df_display['Classificazione AI'] = "Usa tasto AI in sidebar"
+        df_display['Classificazione AI'] = "Premi 'Genera Clustering AI'"
 
     st.dataframe(
         df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Gap %', 'Indice Comp.', 'Classificazione AI']],
@@ -160,6 +175,7 @@ with tab1:
         }
     )
 
+# --- TAB 2: ANALISI PREDITTIVA ---
 with tab2:
     st.subheader("🔍 Previsione Churn & Strategia di Domani")
     if not df.empty:
@@ -180,9 +196,10 @@ with tab2:
         
         with c_ai:
             if st.button(f"🚀 Genera Previsione & Strategia AI"):
-                with st.spinner("Analisi storica e predittiva in corso..."):
+                with st.spinner("Analisi storica in corso..."):
+                    # Chiamata alla funzione predittiva testata su Colab
                     previsione = ai_predictive_strategy(h_data, p_data)
-                    st.success(f"🤖 **Consiglio Strategico:**\n\n{previsione}")
+                    st.success(f"🤖 **Consiglio Strategico AI:**\n\n{previsione}")
         
         st.plotly_chart(px.line(h_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
                                 title=f"Trend Storico: {prod}",
