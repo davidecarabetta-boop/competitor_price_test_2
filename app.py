@@ -28,7 +28,6 @@ def load_data():
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         df.columns = df.columns.str.strip()
 
-        # Pulizia Prezzi e Rank
         for col in ['Sensation_Prezzo', 'Comp_1_Prezzo', 'Comp_2_prezzo']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace('€', '').str.replace('.', '').str.replace(',', '.').str.strip(), errors='coerce').fillna(0)
@@ -44,49 +43,38 @@ def load_data():
 
 df_raw = load_data()
 
-# --- 3. FUNZIONI AI CONTESTUALI (OTTIMIZZATE) ---
+# --- 3. FUNZIONI AI POTENZIATE ---
 
 def ai_analyze_market(df_filtered, scope_name):
-    """Analisi Clustering con forzatura SKU stringa per evitare 'Standard'"""
-    # Selezioniamo i 30 prodotti più critici (Gap più alto) per l'analisi
-    df_sample = df_filtered.copy()
-    df_sample['Gap_Tmp'] = ((df_sample['Sensation_Prezzo'] / df_sample['Comp_1_Prezzo']) - 1)
-    df_analysis = df_sample.sort_values('Gap_Tmp', ascending=False).head(30)
+    """Clustering per Brand o Selezione Globale"""
+    # Sincronizzazione SKU e selezione top 30 per Gap decrescente
+    df_analysis = df_filtered.copy()
+    df_analysis['Gap_Tmp'] = (df_analysis['Sensation_Prezzo'] / df_analysis['Comp_1_Prezzo']) - 1
+    df_analysis = df_analysis.sort_values('Gap_Tmp', ascending=False).head(30)
     
     data_json = df_analysis[['Sku', 'Product', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Sensation_Posizione']].to_json(orient='records')
     
     prompt = f"""
-    Analizza questi prodotti ({scope_name}): {data_json}.
-    Classifica ogni SKU esclusivamente come:
-    1. 'Prodotto Civetta': Se la competizione è estrema o il prezzo è molto vicino al leader.
-    2. 'Prodotto a Margine': Se abbiamo spazio per alzare il prezzo o siamo leader isolati.
-    
-    Rispondi SOLO con un JSON piatto. Esempio: {{"SKU": "Categoria"}}.
-    Usa esattamente gli SKU forniti.
+    Analizza i prodotti di {scope_name}: {data_json}.
+    Classifica ogni SKU in:
+    1. 'Prodotto Civetta': Alta competizione, serve a generare traffico.
+    2. 'Prodotto a Margine': Bassa competizione o distacco alto, ottimizza il profitto.
+    Rispondi SOLO JSON: {{"SKU": "Categoria"}}. Usa SKU come stringhe.
     """
     try:
         response = model.generate_content(prompt)
-        raw_text = response.text.strip().replace('```json', '').replace('```', '')
-        return json.loads(raw_text)
-    except:
-        return {}
+        text = response.text.strip().replace('```json', '').replace('```', '')
+        return json.loads(text)
+    except: return {}
 
 def ai_single_item_strategy(hist_data, p_data):
-    """Analisi Churn e Strategia specifica per singolo prodotto"""
+    """Clustering e Strategia per Singolo Prodotto"""
     trend = hist_data.tail(10)[['Data', 'Sensation_Prezzo', 'Comp_1_Prezzo']].to_string()
-    
-    prompt = f"""
-    Analizza il prodotto: {p_data['Product']}. 
-    Prezzo attuale {p_data['Sensation_Prezzo']}€, Posizione {p_data['Sensation_Posizione']}°. 
-    Trend storico: {trend}.
-    1. Prevedi se il competitor sta per finire le scorte (churn) analizzando se il suo prezzo sale o sparisce.
-    2. Suggerisci l'azione di prezzo per domani per massimizzare il profitto.
-    Rispondi in max 35 parole.
-    """
-    try:
-        return model.generate_content(prompt).text
-    except:
-        return "Analisi AI non disponibile al momento."
+    prompt = f"""Analizza lo SKU {p_data['Sku']} ({p_data['Product']}). 
+    Storico: {trend}. Prezzo attuale {p_data['Sensation_Prezzo']}€, Posizione {p_data['Sensation_Posizione']}°. 
+    Definisci se è 'Civetta' o 'Margine' e dai la mossa di prezzo per domani. (max 30 parole)"""
+    try: return model.generate_content(prompt).text
+    except: return "Analisi non disponibile."
 
 # --- 4. LOGICA SNAPSHOT & SIDEBAR ---
 if df_raw.empty: st.stop()
@@ -98,10 +86,7 @@ with st.sidebar:
     st.header("🤖 AI Strategy Control")
     brand_list = sorted(df_raw['Product'].str.split().str[0].unique())
     selected_brands = st.multiselect("Filtra per Brand", brand_list)
-    
-    # Tasto dinamico per analisi Brand o Globale
-    run_clustering = st.button("🪄 Genera Clustering AI")
-    
+    run_clustering = st.button("🪄 Genera Clustering AI (Brand)")
     if st.button("🔄 Aggiorna Dati"):
         st.cache_data.clear()
         st.rerun()
@@ -111,11 +96,10 @@ if selected_brands:
     df = df[df['Product'].str.startswith(tuple(selected_brands))]
 
 # --- 5. DASHBOARD ---
-tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
+tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 AI Deep Dive"])
 
-# --- TAB 1: OVERVIEW INTEGRATA ---
 with tab1:
-    # KPI
+    # 1. KPI Quadranti
     c1, c2, c3, c4 = st.columns(4)
     win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / len(df)) * 100 if len(df) > 0 else 0
     c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%")
@@ -125,7 +109,7 @@ with tab1:
 
     st.divider()
 
-    # GRAFICI
+    # 2. Grafici (Ripristinati)
     col_l, col_r = st.columns([2, 1])
     with col_l:
         st.subheader("Noi vs Miglior Competitor")
@@ -134,45 +118,40 @@ with tab1:
         st.plotly_chart(fig_bar, use_container_width=True)
     with col_r:
         st.subheader("Distribuzione Rank")
-        fig_pie = px.pie(df, names='Sensation_Posizione', hole=0.5)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(px.pie(df, names='Sensation_Posizione', hole=0.5), use_container_width=True)
 
     st.divider()
 
-    # TABELLA AI & COMPETITIVITÀ
+    # 3. Tabella Strategica
     st.subheader("📋 Piano d'Azione AI & Competitività")
     df_display = df.copy()
+    df_display['Sku'] = df_display['Sku'].astype(str)
     
-    # Calcolo Gap in Percentuale (+/- %)
+    # Calcolo Gap % e Indice
     df_display['Gap %'] = df_display.apply(lambda x: ((x['Sensation_Prezzo'] / x['Comp_1_Prezzo']) - 1) * 100 if x['Comp_1_Prezzo'] > 0 else 0, axis=1)
     df_display['Indice Comp.'] = (df_display['Sensation_Prezzo'] / df_display['Comp_1_Prezzo'] * 100).fillna(0)
     
-    # Sincronizzazione SKU per il matching AI
-    df_display['Sku'] = df_display['Sku'].astype(str)
-    
     if run_clustering:
-        with st.spinner("L'AI sta analizzando i prodotti più critici..."):
-            scope_name = selected_brands[0] if selected_brands else "Catalogo Globale"
-            clusters = ai_analyze_market(df, scope_name)
-            # Pulizia chiavi JSON per matching sicuro
+        with st.spinner("L'AI sta analizzando la selezione..."):
+            scope = selected_brands[0] if selected_brands else "Generale"
+            clusters = ai_analyze_market(df, scope)
             clusters_clean = {str(k): v for k, v in clusters.items()}
-            df_display['AI_Category'] = df_display['Sku'].map(clusters_clean).fillna("Analisi non prioritaria")
+            df_display['Classificazione AI'] = df_display['Sku'].map(clusters_clean).fillna("Analisi non prioritaria")
     else:
-        df_display['AI_Category'] = "Usa tasto AI in sidebar"
+        df_display['Classificazione AI'] = "Usa tasto 'Genera Clustering AI'"
 
     st.dataframe(
-        df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Gap %', 'Indice Comp.', 'AI_Category']],
+        df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Gap %', 'Indice Comp.', 'Classificazione AI']],
         use_container_width=True, hide_index=True,
         column_config={
-            "Gap %": st.column_config.NumberColumn("Gap %", format="%+.1f%%"),
-            "Indice Comp.": st.column_config.ProgressColumn("Indice Comp.", format="%.0f", min_value=80, max_value=150),
-            "AI_Category": st.column_config.TextColumn("🏷️ Classificazione AI")
+            "Gap %": st.column_config.NumberColumn("Gap %", format="%+.1f%%", help="Distanza dal 1° competitor"),
+            "Indice Comp.": st.column_config.ProgressColumn("Posizionamento", format="%.0f", min_value=80, max_value=150),
+            "Sensation_Prezzo": st.column_config.NumberColumn("Tuo Prezzo", format="%.2f €"),
         }
     )
 
-# --- TAB 2: FOCUS PRODOTTO ---
 with tab2:
-    st.subheader("🔍 Focus Prodotto & Analisi Churn AI")
+    st.subheader("🔍 Focus Prodotto & Strategia AI")
     if not df.empty:
         prod = st.selectbox("Seleziona Prodotto:", sorted(df['Product'].unique()))
         p_data = df[df['Product'] == prod].iloc[0]
@@ -180,25 +159,11 @@ with tab2:
 
         c_info, c_ai = st.columns([1, 1])
         with c_info:
-            st.markdown(f"""
-                <div style='background:#f0f2f6;padding:20px;border-radius:10px;border-left:5px solid #0056b3;'>
-                    <h4>{prod}</h4>
-                    <hr>
-                    <p>Posizione TP: <b>{p_data['Sensation_Posizione']}°</b></p>
-                    <p>Prezzo Attuale: <b>{p_data['Sensation_Prezzo']:.2f} €</b></p>
-                </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#f0f2f6;padding:20px;border-radius:10px;border-left:5px solid #0056b3;'><h4>{prod}</h4><hr>Rank: {p_data['Sensation_Posizione']}°<br>Prezzo: {p_data['Sensation_Prezzo']:.2f}€</div>", unsafe_allow_html=True)
         
         with c_ai:
-            if st.button(f"🚀 Genera Strategia & Previsione Churn"):
-                with st.spinner("Gemini sta analizzando lo storico..."):
-                    prediction = ai_single_item_strategy(h_data, p_data)
-                    st.success(f"🤖 **Consiglio AI:** {prediction}")
+            if st.button(f"🚀 Genera Strategia AI per questo item"):
+                with st.spinner("Analisi item in corso..."):
+                    st.success(f"🤖 **Consiglio AI:** {ai_single_item_strategy(h_data, p_data)}")
         
-        # Grafico Storico
-        st.plotly_chart(px.line(h_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
-                                title=f"Trend Storico: {prod}", 
-                                color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'}), 
-                        use_container_width=True)
-    else:
-        st.info("Seleziona un brand nella sidebar per iniziare.")
+        st.plotly_chart(px.line(h_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], title="Andamento Storico"), use_container_width=True)
