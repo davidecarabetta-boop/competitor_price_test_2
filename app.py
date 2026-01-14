@@ -8,15 +8,14 @@ import google.generativeai as genai
 import json
 
 # --- 1. CONFIGURAZIONE AI GEMINI ---
-# Assicurati di aver aggiunto 'gemini_api_key' nei Secrets di Streamlit
 genai.configure(api_key=st.secrets["gemini_api_key"])
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- CONFIGURAZIONE UI & LOGO ---
+# --- CONFIGURAZIONE UI ---
 LOGO_PATH = "logosensation.png" 
 st.set_page_config(page_title="Sensation AI Pricing", layout="wide", page_icon=LOGO_PATH)
 
-# --- 2. CARICAMENTO E PULIZIA DATI (Blindata) ---
+# --- 2. CARICAMENTO DATI ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -29,7 +28,6 @@ def load_data():
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         df.columns = df.columns.str.strip()
 
-        # Conversione Numerica (Virgola -> Punto)
         for col in ['Sensation_Prezzo', 'Comp_1_Prezzo', 'Comp_2_prezzo']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace('€', '').str.replace('.', '').str.replace(',', '.').str.strip(), errors='coerce').fillna(0)
@@ -45,57 +43,33 @@ def load_data():
 
 df_raw = load_data()
 
-# --- 3. FUNZIONI AI AVANZATE (GEMINI) ---
-
+# --- 3. FUNZIONI AI ---
 def ai_cluster_products(df_current):
-    """Usa Gemini per classificare il catalogo in Civetta o Margine"""
-    # Prepariamo un riassunto dei dati per l'AI
     data_summary = df_current[['Sku', 'Product', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Sensation_Posizione']].to_json()
-    
-    prompt = f"""
-    Analizza questi dati di pricing di una profumeria: {data_summary}.
-    Dividi i prodotti in due categorie: 
-    1. 'Prodotto Civetta' (Alta competizione, Rank > 1 o distacco minimo, serve ad attirare traffico).
-    2. 'Prodotto a Margine' (Bassa competizione, sei primo con buon distacco o competitor assenti).
-    Restituisci SOLO un oggetto JSON dove la chiave è lo SKU e il valore è la categoria.
-    """
+    prompt = f"Analizza questi dati: {data_summary}. Dividi in 'Prodotto Civetta' o 'Prodotto a Margine'. Restituisci SOLO JSON: {{'SKU': 'Categoria'}}"
     try:
         response = model.generate_content(prompt)
-        # Pulizia della risposta per estrarre solo il JSON
         clean_json = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_json)
-    except:
-        return {}
+    except: return {}
 
 def ai_predict_stock_out(hist_data, product_name):
-    """Usa Gemini per prevedere il churn (fine scorte) del competitor"""
     trend = hist_data[['Data', 'Comp_1_Prezzo']].to_string()
-    
-    prompt = f"""
-    Analizza lo storico prezzi del competitor per il prodotto {product_name}:
-    {trend}
-    Se vedi che il prezzo del competitor sale improvvisamente o sparisce (va a 0), 
-    è probabile che stia finendo le scorte. 
-    Fornisci una previsione breve (max 20 parole) e consiglia se alzare il prezzo di Sensation.
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except:
-        return "Analisi AI non disponibile al momento."
+    prompt = f"Analizza trend competitor per {product_name}: {trend}. Prevedi stock-out (max 20 parole)."
+    try: return model.generate_content(prompt).text
+    except: return "Analisi non disponibile."
 
 # --- 4. LOGICA SNAPSHOT & SIDEBAR ---
 if df_raw.empty: st.stop()
 df_latest = df_raw.sort_values('Data_dt', ascending=True).drop_duplicates('Sku', keep='last').copy()
 
 with st.sidebar:
-    st.image(LOGO_PATH, use_container_width=True)
+    try: st.image(LOGO_PATH, use_container_width=True)
+    except: st.info("Sensation Intelligence")
     st.header("🤖 AI Strategy Control")
-    full_brand_list = sorted(df_raw['Product'].str.split().str[0].unique())
-    selected_brands = st.multiselect("Filtra per Brand", full_brand_list)
-    
+    brand_list = sorted(df_raw['Product'].str.split().str[0].unique())
+    selected_brands = st.multiselect("Filtra per Brand", brand_list)
     run_clustering = st.button("🪄 Genera Clustering AI")
-    
     if st.button("🔄 Aggiorna Dati"):
         st.cache_data.clear()
         st.rerun()
@@ -105,53 +79,73 @@ if selected_brands:
     df = df[df['Product'].str.startswith(tuple(selected_brands))]
 
 # --- 5. DASHBOARD ---
-tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 AI Deep Dive"])
+tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
 
 with tab1:
-    # KPI e Grafici Classici
-    # ... (Mantieni i 4 KPI e i 2 grafici visti prima) ...
-    
-    st.subheader("📋 Piano d'Azione AI")
-    
-    # Eseguiamo il clustering se l'utente preme il tasto
-    if run_clustering:
-        with st.spinner("L'AI sta analizzando il mercato..."):
-            clusters = ai_cluster_products(df)
-            df['AI_Category'] = df['Sku'].map(clusters).fillna("In Analisi...")
-    else:
-        df['AI_Category'] = "Clicca 'Genera Clustering AI'"
+    # --- KPI ---
+    c1, c2, c3, c4 = st.columns(4)
+    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / len(df)) * 100 if len(df) > 0 else 0
+    c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%")
+    c2.metric("Posizione Media", f"{df['Sensation_Posizione'].mean():.1f}")
+    c3.metric("Prezzo Sensation Medio", f"{df['Sensation_Prezzo'].mean():.2f}€")
+    c4.metric("Prodotti Visualizzati", len(df))
 
-    # Super Tabella con Clustering AI
+    st.divider()
+
+    # --- GRAFICI (RIPRISTINATI) ---
+    col_l, col_r = st.columns([2, 1])
+    with col_l:
+        st.subheader("Noi vs Miglior Competitor")
+        fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
+                         barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+    
+    with col_r:
+        st.subheader("Distribuzione Rank")
+        fig_pie = px.pie(df, names='Sensation_Posizione', hole=0.5)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    st.divider()
+
+    # --- TABELLA RIEPILOGATIVA CON AI ---
+    st.subheader("📋 Piano d'Azione AI & Competitività")
+    
+    df_display = df.copy()
+    
+    # Calcolo Indice e Strategia base
+    df_display['Price_Index'] = (df_display['Sensation_Prezzo'] / df_display['Comp_1_Prezzo'] * 100).replace([float('inf'), -float('inf')], 0).fillna(0)
+    
+    # Clustering AI
+    if run_clustering:
+        with st.spinner("Gemini sta analizzando..."):
+            clusters = ai_cluster_products(df)
+            df_display['AI_Category'] = df_display['Sku'].map(clusters).fillna("In Analisi...")
+    else:
+        df_display['AI_Category'] = "Usa tasto '🪄 Genera Clustering AI'"
+
     st.dataframe(
-        df[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'AI_Category']],
-        use_container_width=True,
-        hide_index=True,
+        df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Price_Index', 'AI_Category']],
+        use_container_width=True, hide_index=True,
         column_config={
-            "AI_Category": st.column_config.TextColumn("🏷️ Tipo Prodotto (AI)", width="medium")
+            "Price_Index": st.column_config.ProgressColumn("Indice Comp.", format="%.0f", min_value=80, max_value=150),
+            "Sensation_Prezzo": st.column_config.NumberColumn("Tuo Prezzo", format="%.2f €"),
+            "AI_Category": st.column_config.TextColumn("🏷️ Classificazione AI")
         }
     )
 
 with tab2:
-    st.subheader("🔍 Previsione Churn & Trend")
-    product_selected = st.selectbox("Analizza Prodotto:", df['Product'].unique())
-    
-    p_data = df[df['Product'] == product_selected].iloc[0]
-    hist_data = df_raw[df_raw['Product'] == product_selected].sort_values('Data_dt')
+    st.subheader("🔍 Focus Prodotto & Previsioni")
+    if not df.empty:
+        prod = st.selectbox("Seleziona Prodotto:", df['Product'].unique())
+        p_data = df[df['Product'] == prod].iloc[0]
+        h_data = df_raw[df_raw['Product'] == prod].sort_values('Data_dt')
 
-    col_card, col_ai = st.columns([1, 2])
-    
-    with col_card:
-        st.markdown(f"""
-            <div style="background-color: #f0f2f6; padding: 20px; border-radius: 10px;">
-                <h3>{product_selected}</h3>
-                <p>Prezzo Attuale: <b>{p_data['Sensation_Prezzo']:.2f} €</b></p>
-                <p>Rank: <b>{p_data['Sensation_Posizione']}°</b></p>
-            </div>
-        """, unsafe_allow_html=True)
+        c_card, c_ai = st.columns([1, 2])
+        with c_card:
+            st.markdown(f"<div style='background:#f0f2f6;padding:20px;border-radius:10px;'><h4>{prod}</h4><hr>Rank: {p_data['Sensation_Posizione']}°<br>Prezzo: {p_data['Sensation_Prezzo']:.2f}€</div>", unsafe_allow_html=True)
         
-    with col_ai:
-        st.info("🧠 **Analisi Predittiva Gemini AI**")
-        prediction = ai_predict_stock_out(hist_data, product_selected)
-        st.write(prediction)
-    
-    st.plotly_chart(px.line(hist_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo']), use_container_width=True)
+        with c_ai:
+            st.info("🧠 **Analisi Predittiva Gemini**")
+            st.write(ai_predict_stock_out(h_data, prod))
+        
+        st.plotly_chart(px.line(h_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], title="Andamento Storico"), use_container_width=True)
