@@ -1,0 +1,21 @@
+name: Daily Price Sync
+on:
+  schedule:
+    - cron: '0 8 * * *' # Gira ogni mattina alle 8:00
+  workflow_dispatch: # Permette l'avvio manuale
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install requests pandas gspread oauth2client
+      - name: Run Scraper
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GS_CREDENTIALS }}
+        run: python scraper.py
