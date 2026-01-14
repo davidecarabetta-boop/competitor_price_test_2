@@ -10,7 +10,7 @@ import json
 # --- 1. CONFIGURAZIONE AI ---
 # Utilizziamo la chiave dai secrets di Streamlit per sicurezza
 genai.configure(api_key=st.secrets["gemini_api_key"])
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- CONFIGURAZIONE UI ---
 LOGO_PATH = "logosensation.png" 
