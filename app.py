@@ -7,24 +7,24 @@ import gspread
 import base64
 
 # --- CONFIGURAZIONE LOGO & UI ---
-# Se hai l'SVG come stringa, inseriscilo qui. 
-# Altrimenti usa il link diretto affidabile.
-SENSATION_LOGO_SVG = "assets/logo-sensation.svg"
+# Definiamo l'SVG come una stringa pulita
+SENSATION_LOGO_SVG = """
 <svg width="200" height="60" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
     <rect width="200" height="60" fill="#0056b3" rx="10"/>
     <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="24" fill="white">SENSATION</text>
 </svg>
 """
 
-# Trasformiamo l'SVG in un formato leggibile per la favicon (page_icon)
+# Funzione per convertire l'SVG in un formato leggibile dal browser come icona
 def get_svg_data_uri(svg_str):
     b64 = base64.b64encode(svg_str.encode('utf-8')).decode('utf-8')
     return f"data:image/svg+xml;base64,{b64}"
 
+# Configurazione della pagina: il logo Sensation sostituisce la siringa
 st.set_page_config(
     page_title="Sensation Perfume Intelligence", 
     layout="wide", 
-    page_icon=get_svg_data_uri(SENSATION_LOGO_SVG) # Sostituita la siringa
+    page_icon=get_svg_data_uri(SENSATION_LOGO_SVG)
 )
 
 # Custom CSS Premium
