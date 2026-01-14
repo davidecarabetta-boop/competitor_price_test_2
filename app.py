@@ -9,7 +9,7 @@ import base64
 # --- CONFIGURAZIONE LOGO & UI ---
 # Se hai l'SVG come stringa, inseriscilo qui. 
 # Altrimenti usa il link diretto affidabile.
-SENSATION_LOGO_SVG = """
+SENSATION_LOGO_SVG = "assets/logo-sensation.svg"
 <svg width="200" height="60" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
     <rect width="200" height="60" fill="#0056b3" rx="10"/>
     <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="24" fill="white">SENSATION</text>
