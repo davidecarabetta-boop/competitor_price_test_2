@@ -92,27 +92,48 @@ if selected_brands:
 tab1, tab2 = st.tabs(["📊 Overview Mercato", "🔍 Focus Prodotto"])
 
 with tab1:
-    # KPI - Integrazione Buy Box Win Rate basata sulla posizione delle offerte 
-    c1, c2, c3, c4 = st.columns(4)
-    win_rate = (df[df['Sensation_Posizione'] == 1].shape[0] / df.shape[0]) * 100 if len(df) > 0 else 0
-    c1.metric("Buy Box Win Rate", f"{win_rate:.1f}%", help="Percentuale prodotti con Rank 1 ")
-    c2.metric("Posizione Media", f"{df['Sensation_Posizione'].mean():.1f}")
-    c3.metric("Prezzo Sensation Medio", f"{df['Sensation_Prezzo'].mean():.2f}€")
-    c4.metric("SKU Monitorati", len(df))
+ with tab1:
+    # ... (Mantieni i KPI e i grafici esistenti qui) ...
 
-    col_left, col_right = st.columns([2, 1])
-    with col_left:
-        st.subheader("Confronto Prezzi: Noi vs Competitor Rank 1")
-        fig_bar = px.bar(df.head(15), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'],
-                         labels={'value': 'Euro (€)', 'variable': 'Venditore'},
-                         barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
-        st.plotly_chart(fig_bar, use_container_width=True)
+    st.divider()
+    
+    # --- NUOVA SEZIONE: TABELLA RIEPILOGATIVA BRAND ---
+    st.subheader(f"📋 Riepilogo Dettagliato Prodotti")
+    
+    if not df.empty:
+        # Creiamo una copia per la visualizzazione e calcoliamo il Gap
+        df_display = df.copy()
         
-    with col_right:
-        st.subheader("Distribuzione Posizioni (Rank)")
-        fig_donut = px.pie(df, names='Sensation_Posizione', hole=0.5)
-        st.plotly_chart(fig_donut, use_container_width=True)
+        # Calcolo del Gap Prezzo rispetto al Rank 1 per dare valore AI
+        df_display['Gap_vs_Migliore'] = df_display['Sensation_Prezzo'] - df_display['Comp_1_Prezzo']
+        
+        # Definiamo uno stato visivo rapido
+        df_display['Status'] = df_display.apply(
+            lambda x: "✅ Leader" if x['Sensation_Posizione'] == 1 
+            else ("⚠️ Allineare" if x['Gap_vs_Migliore'] < 2 else "❌ Fuori Mercato"), axis=1
+        )
 
+        # Configurazione colonne per un look professionale
+        st.dataframe(
+            df_display[[
+                'Data', 'Sku', 'Product', 'Sensation_Posizione', 
+                'Sensation_Prezzo', 'Comp_1_Prezzo', 'Gap_vs_Migliore', 'Status'
+            ]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Data": st.column_config.TextColumn("Data Rilevazione"),
+                "Sku": st.column_config.TextColumn("SKU"),
+                "Product": st.column_config.TextColumn("Prodotto", width="large"),
+                "Sensation_Posizione": st.column_config.NumberColumn("Rank TP", help="Posizione su Trovaprezzi "),
+                "Sensation_Prezzo": st.column_config.NumberColumn("Tuo Prezzo", format="%.2f €"),
+                "Comp_1_Prezzo": st.column_config.NumberColumn("Miglior Competitor", format="%.2f €"),
+                "Gap_vs_Migliore": st.column_config.NumberColumn("Gap (€)", format="%.2f €"),
+                "Status": st.column_config.TextColumn("Analisi AI")
+            }
+        )
+    else:
+        st.info("Seleziona un Brand nella sidebar per vedere il riepilogo.")
 with tab2:
     st.subheader("Analisi Storica e Competitor")
     product_selected = st.selectbox("Seleziona Profumo:", df['Product'].unique())
