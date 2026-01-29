@@ -1,9 +1,9 @@
 name: Sensation AI Market & Revenue Sync
 
-# Definizione dei trigger: esecuzione automatica ogni 4 ore e avvio manuale
+# Definizione dei trigger: esecuzione automatica ogni mattina alle 8:00 e avvio manuale
 on:
   schedule:
-    - cron: '0 */4 * * *' 
+    - cron: '0 8 * * *' 
   workflow_dispatch: 
 
 jobs:
@@ -20,9 +20,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip' # Velocizza le esecuzioni successive
+          cache: 'pip'
 
-      # 3. Installa le dipendenze (Pandas, Google API, etc.)
+      # 3. Installa le dipendenze
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -31,6 +31,7 @@ jobs:
       # 4. Esecuzione Sync Trovaprezzi (Prezzi e Posizionamento)
       - name: Run Trovaprezzi Market Sync
         env:
+          # Ripristinato il nome originale del segreto GCP_SA_KEY
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           TP_API_KEY: ${{ secrets.TP_API_KEY }}
         run: python sync_data.py
@@ -42,6 +43,6 @@ jobs:
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
         run: python ga4_sync.py
 
-      # 6. Log finale (opzionale)
+      # 6. Log finale
       - name: Sync Status Check
         run: echo "Sincronizzazione completata con successo alle $(date)"
