@@ -11,7 +11,7 @@ from gspread_dataframe import set_with_dataframe
 # --- CONFIGURAZIONE GA4 ---
 PROPERTY_ID = "IL_TUO_PROPERTY_ID" # Inseriscilo nei Secrets
 GOOGLE_CREDENTIALS = os.environ.get("GCP_SA_KEY")
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1eIojQyXLuC1FO89ZGcswy4s8AgFX3xc1UuheFFgM6Kk/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1eIojQyXLuC1FO89ZGcswy4s8AgFX3xc1UuheFFgM6Kk/edit?gid=1248846582#gid=1248846582"
 
 def get_ga4_report():
     print("⏳ Estrazione dati da GA4...")
