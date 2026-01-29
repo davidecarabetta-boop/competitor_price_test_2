@@ -1,29 +1,47 @@
-name: Daily Price Sync
+name: Sensation AI Market & Revenue Sync
 
+# Definizione dei trigger: esecuzione automatica ogni 4 ore e avvio manuale
 on:
   schedule:
-    - cron: '0 8 * * *' # Gira ogni mattina alle 8:00
-  workflow_dispatch: # Permette l'avvio manuale
+    - cron: '0 */4 * * *' 
+  workflow_dispatch: 
 
 jobs:
-  build:
+  sync_process:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout repository
+      # 1. Scarica il codice dal repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      # 2. Configura l'ambiente Python
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
+          cache: 'pip' # Velocizza le esecuzioni successive
 
-      - name: Install dependencies
+      # 3. Installa le dipendenze (Pandas, Google API, etc.)
+      - name: Install Dependencies
         run: |
-          pip install requests pandas gspread gspread-dataframe google-auth
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Scraper
+      # 4. Esecuzione Sync Trovaprezzi (Prezzi e Posizionamento)
+      - name: Run Trovaprezzi Market Sync
         env:
-          # Qui colleghiamo i Secrets di GitHub alle variabili che legge Python
-          GCP_SA_KEY: ${{ secrets.GS_CREDENTIALS }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           TP_API_KEY: ${{ secrets.TP_API_KEY }}
-        run: python scraper.py
+        run: python sync_data.py
+
+      # 5. Esecuzione Sync GA4 (Entrate e Vendite)
+      - name: Run GA4 Revenue Sync
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+        run: python ga4_sync.py
+
+      # 6. Log finale (opzionale)
+      - name: Sync Status Check
+        run: echo "Sincronizzazione completata con successo alle $(date)"
