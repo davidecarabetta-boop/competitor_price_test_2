@@ -16,11 +16,11 @@ GOOGLE_CREDENTIALS = os.environ.get("GCP_SA_KEY")
 BASE_URL = "https://services.7pixel.it/api/v1/"
 
 LIMITE_PRODOTTI = 500  # <--- SETTATO A 500 COME RICHIESTO
-LIMITE_COMPETITOR = 10
+LIMITE_COMPETITOR = 5
 
 # --- 2. FUNZIONE LETTURA XML CON LIMITE ---
 def get_xml_products(url, limit):
-    print(f"⏳ Lettura feed XML (limite {limit} prodotti)...")
+    print(f"Lettura feed XML (limite {limit} prodotti)...")
     try:
         response = requests.get(url)
         root = ET.fromstring(response.content)
@@ -42,10 +42,10 @@ def get_xml_products(url, limit):
             if len(products_info) >= limit:
                 break
                 
-        print(f"✅ Presi {len(products_info)} prodotti dal feed.")
+        print(f"Presi {len(products_info)} prodotti dal feed.")
         return products_info
     except Exception as e:
-        print(f"❌ Errore XML: {e}")
+        print(f"Errore XML: {e}")
         return []
 
 # --- 3. ESPANSIONE COMPETITOR ---
@@ -77,7 +77,7 @@ def espandi_competitor(df, num_comp):
 # --- 4. LOGICA DI SINCRONIZZAZIONE ---
 def sync_data():
     if not GOOGLE_CREDENTIALS or not API_KEY:
-        print("❌ Errore: Credenziali mancanti nei Secrets di GitHub!")
+        print("Errore: Credenziali mancanti nei Secrets di GitHub!")
         return
 
     # Autenticazione Google
@@ -107,7 +107,7 @@ def sync_data():
     df_filtrato = df_tp[mask_id | mask_titolo].drop_duplicates(subset=['Product']).copy()
 
     if df_filtrato.empty:
-        print("❌ Nessun match trovato.")
+        print("Nessun match trovato.")
         return
 
     ora_attuale = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -121,7 +121,7 @@ def sync_data():
     includi_header = True if riga_inizio <= 1 else False
     
     set_with_dataframe(sheet, df_finale, row=riga_inizio, include_column_header=includi_header)
-    print(f"✅ Operazione completata. Salvati {len(df_finale)} prodotti.")
+    print(f"Operazione completata. Salvati {len(df_finale)} prodotti.")
 
 if __name__ == "__main__":
     sync_data()
