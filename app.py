@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import google.generativeai as genai
 import gspread
 import json
 import re
 from datetime import date
+import os
 
 # --- 1. CONFIGURAZIONE ---
 st.set_page_config(page_title="Sensation AI Pricing Tower", layout="wide", page_icon="📈")
@@ -83,20 +86,16 @@ def load_data():
         # Merge
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # --- GESTIONE DATA E ORARIO (FIX RICHIESTO) ---
+        # GESTIONE DATA E ORARIO
         col_data = 'Data' if 'Data' in df_final.columns else ('Data_esecuzione' if 'Data_esecuzione' in df_final.columns else None)
         
         if col_data: 
-            # 1. Converte in datetime
             df_final['Data_dt'] = pd.to_datetime(df_final[col_data], dayfirst=True, errors='coerce')
-            # 2. Rimuove l'orario (normalizza a mezzanotte) per evitare problemi nei grafici
             df_final['Data_dt'] = df_final['Data_dt'].dt.normalize()
         else: 
             df_final['Data_dt'] = pd.Timestamp.now().normalize()
             
-        # Gestione Categoria (se manca la colonna, ne creiamo una fittizia o usiamo una logica)
         if 'Categoria' not in df_final.columns:
-            # Fallback: Se c'è una colonna 'Category' la usa, altrimenti mette 'N/D'
             df_final['Categoria'] = df_final.get('Category', 'Generale')
 
         return df_final.dropna(subset=['Data_dt'])
@@ -146,24 +145,18 @@ def ai_predictive_strategy(hist_data, current_data):
     except Exception as e: return f"Errore AI: {e}"
 
 # --- 5. INTERFACCIA E FILTRI ---
-
 df_raw = load_data()
 if df_raw.empty: st.stop()
 
 with st.sidebar:
-    # Controlla se il file esiste fisicamente (metodo più sicuro)
-    import os
     if os.path.exists("logosensation.png"):
         st.image("logosensation.png", use_container_width=True)
     else:
-        # Fallback se non trova l'immagine
         st.title("Sensation AI")
 
-    # --- 1. FILTRO DATA (Range) ---
     min_date = df_raw['Data_dt'].min().date()
     max_date = df_raw['Data_dt'].max().date()
     
-    # Se c'è un solo giorno, non mostrare il range che confonde
     if min_date == max_date:
         st.info(f"📅 Dati del: {min_date}")
         start_date, end_date = min_date, max_date
@@ -174,45 +167,29 @@ with st.sidebar:
         else:
             start_date, end_date = min_date, max_date
 
-    # Applicazione Filtro Data al Raw Data
     mask_date = (df_raw['Data_dt'].dt.date >= start_date) & (df_raw['Data_dt'].dt.date <= end_date)
     df_period = df_raw[mask_date].copy()
-
-    # Creiamo lo snapshot (ultima rilevazione nel periodo selezionato) per le tabelle
     df_latest = df_period.sort_values('Data_dt').drop_duplicates('Sku', keep='last').copy()
 
-    # --- 2. ALTRI FILTRI (Brand, Categoria, Prezzo, Entrate, Vendite) ---
-    
-    # A. Brand
     all_brands = sorted(list(set([str(p).split()[0] for p in df_latest['Product'] if p])))
     sel_brands = st.multiselect("Brand", all_brands, default=[])
     
-    # B. Categoria (Se presente)
     all_cats = sorted(df_latest['Categoria'].astype(str).unique())
     sel_cats = st.multiselect("Categoria", all_cats, default=[])
 
-    # C. Fascia di Prezzo
     min_p, max_p = int(df_latest['Price'].min()), int(df_latest['Price'].max())
-    # Gestione caso prezzo unico
-    if min_p == max_p: 
-        price_range = (min_p, max_p)
-        st.caption(f"Prezzo fisso: {min_p}€")
-    else:
-        price_range = st.slider("Fascia di Prezzo (€)", min_p, max_p, (min_p, max_p))
+    if min_p == max_p: price_range = (min_p, max_p)
+    else: price_range = st.slider("Fascia di Prezzo (€)", min_p, max_p, (min_p, max_p))
 
-    # D. Entrate Generate
     min_r, max_r = int(df_latest['Entrate'].min()), int(df_latest['Entrate'].max())
     if min_r == max_r: revenue_range = (min_r, max_r)
     else: revenue_range = st.slider("Entrate Generate (€)", min_r, max_r, (min_r, max_r))
 
-    # E. Numero Vendite
     min_v, max_v = int(df_latest['Vendite'].min()), int(df_latest['Vendite'].max())
     if min_v == max_v: sales_range = (min_v, max_v)
     else: sales_range = st.slider("Numero Vendite", min_v, max_v, (min_v, max_v))
 
     st.divider()
-    
-    # AI Buttons
     if "ai_clusters" not in st.session_state: st.session_state.ai_clusters = pd.DataFrame()
     if st.button("✨ Clustering AI"):
         with st.spinner("Analisi..."): st.session_state.ai_clusters = ai_clustering_bulk(df_latest)
@@ -221,20 +198,13 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- APPLICAZIONE FILTRI ---
+# APPLICAZIONE FILTRI
 df_filtered = df_latest.copy()
-
-# Filtro Brand
 if sel_brands:
-    # Filtra se il prodotto inizia con uno dei brand selezionati
     pattern = '|'.join(sel_brands)
     df_filtered = df_filtered[df_filtered['Product'].str.contains(pattern, case=False, na=False)]
-
-# Filtro Categoria
 if sel_cats:
     df_filtered = df_filtered[df_filtered['Categoria'].isin(sel_cats)]
-
-# Filtri Numerici
 df_filtered = df_filtered[
     (df_filtered['Price'] >= price_range[0]) & (df_filtered['Price'] <= price_range[1]) &
     (df_filtered['Entrate'] >= revenue_range[0]) & (df_filtered['Entrate'] <= revenue_range[1]) &
@@ -245,10 +215,9 @@ df_filtered = df_filtered[
 st.title("🚀 Control Tower Sensation")
 st.markdown(f"**Prodotti visualizzati:** {len(df_filtered)} su {len(df_latest)}")
 
-tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 Focus & AI Prediction"])
+tab1, tab2, tab3 = st.tabs(["📊 Market Intelligence", "🔍 Focus & AI Prediction", "📈 Price vs Revenue"])
 
 with tab1:
-    # KPI
     c1, c2, c3, c4 = st.columns(4)
     win_rate = (df_filtered['Rank'] == 1).mean() if not df_filtered.empty else 0
     c1.metric("Win Rate", f"{win_rate:.1%}")
@@ -257,81 +226,96 @@ with tab1:
     c4.metric("Entrate Totali (Filtrate)", f"€ {df_filtered['Entrate'].sum():,.0f}")
 
     st.divider()
-
-    # Grafico Bar
     st.subheader("Confronto Prezzi (Top 15 Filtri)")
     df_chart = df_filtered.sort_values('Entrate', ascending=False).head(15).rename(columns={'Price': 'Sensation_Prezzo'})
     if not df_chart.empty:
         fig_bar = px.bar(
-            df_chart, 
-            x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
-            barmode='group',
-            color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'}
+            df_chart, x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
+            barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'}
         )
         st.plotly_chart(fig_bar, use_container_width=True)
-    else:
-        st.warning("Nessun dato corrisponde ai filtri selezionati.")
+    else: st.warning("Nessun dato corrispondente.")
 
-    # Tabella
     st.subheader("📋 Lista Prodotti")
     df_display = df_filtered.copy()
     if not st.session_state.ai_clusters.empty:
         df_display = df_display.merge(st.session_state.ai_clusters, on='Sku', how='left')
         df_display['Classificazione AI'] = df_display['Categoria'].fillna("-")
-    else:
-        df_display['Classificazione AI'] = "-"
-
+    else: df_display['Classificazione AI'] = "-"
     cols_show = ['Sku', 'Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Entrate', 'Vendite', 'Classificazione AI']
-    df_show = df_display[cols_show].rename(columns={'Rank': 'Posizione', 'Price': 'Nostro Prezzo'})
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+    st.dataframe(df_display[cols_show].rename(columns={'Rank': 'Posizione', 'Price': 'Nostro Prezzo'}), use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("🔍 Analisi Storica e Predittiva")
-    
-    # Qui usiamo i prodotti filtrati per popolare la selectbox
     prods = df_filtered['Product'].unique()
-    
     if len(prods) > 0:
-        selected_prod = st.selectbox("Seleziona Prodotto (tra quelli filtrati):", prods)
-        
-        # Recuperiamo i dati puntuali e lo storico COMPLETO (filtrato solo per data)
+        selected_prod = st.selectbox("Seleziona Prodotto:", prods)
         p_data = df_filtered[df_filtered['Product'] == selected_prod].iloc[0]
-        
-        # Storico: prendiamo dal df_period (filtrato per data) ma SOLO per questo prodotto
         h_data = df_period[df_period['Product'] == selected_prod].sort_values('Data_dt')
 
         c_info, c_ai = st.columns([1, 1])
-        with c_info:
-            st.info(f"**{selected_prod}**\n\n💰 Prezzo: {p_data['Price']}€\n\n🏆 Posizione: {p_data['Rank']}°")
-        
+        with c_info: st.info(f"**{selected_prod}**\n\n💰 Prezzo: {p_data['Price']}€\n\n🏆 Posizione: {p_data['Rank']}°")
         with c_ai:
             if st.button("🚀 Analizza SKU"):
-                with st.spinner("AI al lavoro..."):
-                    an = ai_predictive_strategy(h_data, p_data)
-                    st.success(an)
+                with st.spinner("AI al lavoro..."): st.success(ai_predictive_strategy(h_data, p_data))
 
-        # Grafico Trend con asse X formattato
         if not h_data.empty:
-            df_plot = h_data.rename(columns={'Price': 'Sensation_Prezzo'})
-            
-            # Creazione Grafico
-            fig_line = px.line(
-                df_plot, 
-                x='Data_dt', 
-                y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
-                markers=True, 
-                title="Andamento nel Periodo"
-            )
-            
-            # --- FIX ASSE X (SOLO DATA, NO ORE) ---
-            fig_line.update_xaxes(
-                tickformat="%d-%m-%Y",  # Formato Giorno-Mese-Anno
-                dtick="D1" # Forza un tick ogni giorno (opzionale, utile se hai pochi dati)
-            )
-            
+            fig_line = px.line(h_data.rename(columns={'Price': 'Sensation_Prezzo'}), x='Data_dt', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], markers=True, title="Andamento Prezzi")
+            fig_line.update_xaxes(tickformat="%d-%m-%Y")
             st.plotly_chart(fig_line, use_container_width=True)
-        else:
-            st.warning("Storico insufficiente per il periodo selezionato.")
+        else: st.warning("Storico insufficiente.")
+    else: st.warning("Nessun prodotto disponibile.")
+
+with tab3:
+    st.subheader("📈 Correlazione: Dinamica Prezzi vs Entrate")
+    prods_3 = df_filtered['Product'].unique()
+    
+    if len(prods_3) > 0:
+        selected_prod_3 = st.selectbox("Seleziona Prodotto per analisi entrate:", prods_3, key="sel_tab3")
+        h_data_3 = df_period[df_period['Product'] == selected_prod_3].sort_values('Data_dt')
+
+        if not h_data_3.empty:
+            # Creazione grafico con doppio asse Y
+            fig_3 = make_subplots(specs=[[{"secondary_y": True}]])
+
+            # Linea Prezzo Sensation (Asse Y1)
+            fig_3.add_trace(
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Price'], name="Nostro Prezzo",
+                           line=dict(color="#0056b3", width=3)),
+                secondary_y=False,
+            )
+
+            # Linea Prezzo Competitor (Asse Y1)
+            fig_3.add_trace(
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Comp_1_Prezzo'], name="Prezzo Competitor",
+                           line=dict(color="#ffa500", dash='dot')),
+                secondary_y=False,
+            )
+
+            # Area Entrate (Asse Y2)
+            fig_3.add_trace(
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Entrate'], name="Entrate (€)",
+                           fill='tozeroy', line=dict(color="rgba(40, 167, 69, 0.5)", width=0)),
+                secondary_y=True,
+            )
+
+            fig_3.update_layout(
+                title_text=f"Analisi Prezzo vs Performance: {selected_prod_3}",
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+
+            fig_3.update_xaxes(title_text="Data", tickformat="%d-%m")
+            fig_3.update_yaxes(title_text="<b>Prezzo</b> (€)", secondary_y=False)
+            fig_3.update_yaxes(title_text="<b>Entrate</b> (€)", secondary_y=True)
+
+            st.plotly_chart(fig_3, use_container_width=True)
             
+            # Calcolo correlazione semplice se ci sono abbastanza dati
+            if len(h_data_3) > 3:
+                corr = h_data_3['Price'].corr(h_data_3['Entrate'])
+                st.caption(f"💡 Indice di correlazione Prezzo/Entrate: **{corr:.2f}** (1: massima correlazione, -1: inversa)")
+        else:
+            st.warning("Dati storici non sufficienti per il periodo selezionato.")
     else:
-        st.warning("Nessun prodotto disponibile con i filtri attuali.")
+        st.warning("Nessun prodotto disponibile.")
