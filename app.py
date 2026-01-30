@@ -144,7 +144,7 @@ with st.sidebar:
     # --- MODIFICA: CHIAMATA AI SU UTILS ---
     if "ai_clusters" not in st.session_state: st.session_state.ai_clusters = pd.DataFrame()
     
-    if st.button("✨ Clustering AI"):
+    if st.button("Clustering AI"):
         with st.spinner("Analisi di mercato in corso (Gemini)..."):
             # Passiamo la chiave API dal secrets a utils
             st.session_state.ai_clusters = utils.ai_clustering_bulk(df_latest, st.secrets["gemini_api_key"])
@@ -221,10 +221,10 @@ with tab2:
 
         c_info, c_ai = st.columns([1, 1])
         with c_info: 
-            st.info(f"**{selected_prod}**\n\n💰 Prezzo: {p_data['Price']}€\n\n🏆 Posizione: {p_data['Rank']}°")
+            st.info(f"**{selected_prod}**\n\n Prezzo: {p_data['Price']}€\n\n Posizione: {p_data['Rank']}°")
         
         with c_ai:
-            if st.button("🚀 Analizza SKU"):
+            if st.button(" Analizza SKU"):
                 with st.spinner("AI al lavoro..."): 
                     # --- MODIFICA: CHIAMATA A UTILS.AI_STRATEGIC_ANALYSIS ---
                     response_json = utils.ai_strategic_analysis(p_data, st.secrets["gemini_api_key"])
