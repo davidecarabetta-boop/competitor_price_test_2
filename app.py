@@ -86,14 +86,17 @@ def load_data():
         # Merge
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # GESTIONE DATA E ORARIO
-        col_data = 'Data' if 'Data' in df_final.columns else ('Data_esecuzione' if 'Data_esecuzione' in df_final.columns else None)
-        
-        if col_data: 
-            df_final['Data_dt'] = pd.to_datetime(df_final[col_data], dayfirst=True, errors='coerce')
-            df_final['Data_dt'] = df_final['Data_dt'].dt.normalize()
-        else: 
-            df_final['Data_dt'] = pd.Timestamp.now().normalize()
+        # --- NUOVA GESTIONE DATA (FIX) ---
+        # Cerchiamo la colonna 'Data' specifica del foglio storico
+        if 'Data' in df_final.columns:
+            df_final['Data_dt'] = pd.to_datetime(df_final['Data'], dayfirst=True, errors='coerce')
+        elif 'Data_esecuzione' in df_final.columns:
+            df_final['Data_dt'] = pd.to_datetime(df_final['Data_esecuzione'], dayfirst=True, errors='coerce')
+        else:
+            df_final['Data_dt'] = pd.Timestamp.now()
+            
+        # Normalizziamo (rimuoviamo l'ora) per permettere il raggruppamento corretto
+        df_final['Data_dt'] = df_final['Data_dt'].dt.normalize()
             
         if 'Categoria' not in df_final.columns:
             df_final['Categoria'] = df_final.get('Category', 'Generale')
@@ -277,8 +280,7 @@ with tab3:
         h_data_3 = df_period[df_period['Product'] == selected_prod_3].copy()
 
         if not h_data_3.empty:
-            # --- SOLUZIONE AL PROBLEMA DEI PUNTI ISOLATI ---
-            # Raggruppiamo per giorno per eliminare i micro-timestamp e sommare le entrate
+            # Raggruppiamo per giorno (Data_dt) per eliminare i duplicati orari e sommare le entrate
             h_data_3 = h_data_3.groupby('Data_dt').agg({
                 'Price': 'mean',
                 'Comp_1_Prezzo': 'mean',
@@ -288,7 +290,7 @@ with tab3:
             # Creazione grafico con doppio asse Y
             fig_3 = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # Nostro Prezzo (Asse Y1) - Usiamo mode='lines+markers' per connettere i giorni
+            # Nostro Prezzo (Asse Y1)
             fig_3.add_trace(
                 go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Price'], name="Nostro Prezzo",
                            mode='lines+markers', line=dict(color="#0056b3", width=3)),
@@ -309,12 +311,11 @@ with tab3:
                 secondary_y=True,
             )
 
-            # --- SOLUZIONE AL PROBLEMA DELL'ASSE X CONGESTIONATO ---
             fig_3.update_xaxes(
-                type='date',           # Forza Plotly a interpretare l'asse come tempo lineare
-                tickformat="%d-%m",    # Mostra solo Giorno-Mese
-                dtick="D1",            # Forza un'etichetta al giorno per evitare sovrapposizioni
-                tickangle=-45          # Inclina le date per miglior leggibilità
+                type='date',
+                tickformat="%d-%m",
+                dtick="D1",
+                tickangle=-45
             )
 
             fig_3.update_layout(
