@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Check Secrets
 if "gcp_service_account" not in st.secrets or "gemini_api_key" not in st.secrets:
     st.error("⛔ Configurazione mancante in secrets.toml")
     st.stop()
@@ -23,230 +22,263 @@ genai.configure(api_key=st.secrets["gemini_api_key"])
 MODEL_NAME = 'gemini-1.5-flash'
 
 # --- 2. FUNZIONI UTILITÀ ---
-
 def clean_currency(value):
-    """Pulisce valute (es. '1.200,00 €' -> 1200.00)"""
-    if pd.isna(value) or str(value).strip() == '':
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    
+    if pd.isna(value) or str(value).strip() == '': return 0.0
+    if isinstance(value, (int, float)): return float(value)
     s = str(value).replace('€', '').replace('$', '').strip()
     try:
-        # Gestione 1.000,00 vs 1,000.00
         if ',' in s and '.' in s:
-            if s.find('.') < s.find(','): # 1.000,00
-                s = s.replace('.', '').replace(',', '.')
-            else: # 1,000.00
-                s = s.replace(',', '')
-        elif ',' in s: 
-            s = s.replace(',', '.')
+            if s.find('.') < s.find(','): s = s.replace('.', '').replace(',', '.')
+            else: s = s.replace(',', '')
+        elif ',' in s: s = s.replace(',', '.')
         return float(s)
-    except:
-        return 0.0
+    except: return 0.0
 
 def clean_json_response(text):
     text = text.strip()
     if "```" in text:
         pattern = r"```(?:json)?(.*?)```"
         match = re.search(pattern, text, re.DOTALL)
-        if match:
-            text = match.group(1).strip()
+        if match: text = match.group(1).strip()
     return text
 
-# --- 3. CARICAMENTO DATI (MAPPING CORRETTO) ---
-
+# --- 3. CARICAMENTO DATI ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
-        # Auth
         creds_dict = dict(st.secrets["gcp_service_account"])
         client = gspread.service_account_from_dict(creds_dict)
         sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
         
-        # 1. Carica Prezzi (Foglio1)
-        data_p = sh.sheet1.get_all_records()
-        df_p = pd.DataFrame(data_p)
-        
-        if df_p.empty:
-            # Crea struttura vuota se manca tutto
-            return pd.DataFrame(columns=['Sku', 'Product', 'Data_dt', 'Price', 'Rank', 'Comp_1_Prezzo'])
+        # Carica Prezzi
+        df_p = pd.DataFrame(sh.sheet1.get_all_records())
+        if df_p.empty: return pd.DataFrame(columns=['Sku', 'Product', 'Data_dt', 'Price', 'Rank'])
 
-        # 2. Carica Entrate
-        try:
-            data_r = sh.worksheet("Entrate").get_all_records()
-            df_r = pd.DataFrame(data_r)
-        except:
-            df_r = pd.DataFrame(columns=['Sku', 'Entrate', 'Vendite'])
+        # Carica Entrate
+        try: df_r = pd.DataFrame(sh.worksheet("Entrate").get_all_records())
+        except: df_r = pd.DataFrame(columns=['Sku', 'Entrate', 'Vendite'])
 
-        # --- MAPPING DELLE TUE COLONNE ---
-        # Qui rinominiamo le TUE colonne in quelle standard del codice
-        # Sensation_Prezzo -> Price
-        # Sensation_Posizione -> Rank
+        # MAPPING COLONNE (Il cuore della stabilità)
         rename_map = {
             'Sensation_Prezzo': 'Price',
             'Sensation_Posizione': 'Rank',
-            'Codice': 'Sku',   # Caso mai servisse
-            'id': 'Sku'        # Caso mai servisse
+            'Codice': 'Sku', 'id': 'Sku'
         }
         df_p.rename(columns=rename_map, inplace=True)
 
-        # Standardizza nomi (rimuovi spazi)
-        df_p.columns = df_p.columns.str.strip()
-        if not df_r.empty: df_r.columns = df_r.columns.str.strip()
+        # Standardizza
+        for df in [df_p, df_r]:
+            if not df.empty:
+                df.columns = df.columns.str.strip()
+                if 'Sku' in df.columns: df['Sku'] = df['Sku'].astype(str).str.strip()
 
-        # Check colonne critiche mancanti dopo il rinomina
+        # Check colonne e pulizia
         if 'Price' not in df_p.columns: df_p['Price'] = 0.0
         if 'Rank' not in df_p.columns: df_p['Rank'] = 99
         if 'Comp_1_Prezzo' not in df_p.columns: df_p['Comp_1_Prezzo'] = 0.0
         
-        # Pulizia Valori
-        for col in ['Price', 'Comp_1_Prezzo']:
-            if col in df_p.columns:
-                df_p[col] = df_p[col].apply(clean_currency)
-        
+        for col in ['Price', 'Comp_1_Prezzo']: df_p[col] = df_p[col].apply(clean_currency)
         df_p['Rank'] = pd.to_numeric(df_p['Rank'], errors='coerce').fillna(99).astype(int)
 
-        # Pulizia Entrate
         if not df_r.empty:
             for col in ['Entrate', 'Vendite']:
-                if col in df_r.columns:
-                    df_r[col] = df_r[col].apply(clean_currency)
-            if 'Sku' in df_r.columns:
-                df_r['Sku'] = df_r['Sku'].astype(str).str.strip()
+                if col in df_r.columns: df_r[col] = df_r[col].apply(clean_currency)
 
-        if 'Sku' in df_p.columns:
-            df_p['Sku'] = df_p['Sku'].astype(str).str.strip()
-
-        # MERGE
+        # Merge
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # --- GESTIONE DATA ---
-        # Tu hai "Data" e "Data_esecuzione". Il codice prova a prenderne una.
-        col_data = None
-        if 'Data' in df_final.columns:
-            col_data = 'Data'
-        elif 'Data_esecuzione' in df_final.columns:
-            col_data = 'Data_esecuzione'
+        # Data
+        col_data = 'Data' if 'Data' in df_final.columns else ('Data_esecuzione' if 'Data_esecuzione' in df_final.columns else None)
+        if col_data: df_final['Data_dt'] = pd.to_datetime(df_final[col_data], dayfirst=True, errors='coerce')
+        else: df_final['Data_dt'] = pd.Timestamp.now()
             
-        if col_data:
-            df_final['Data_dt'] = pd.to_datetime(df_final[col_data], dayfirst=True, errors='coerce')
-        else:
-            df_final['Data_dt'] = pd.Timestamp.now()
-            
-        df_final = df_final.dropna(subset=['Data_dt'])
-        
-        return df_final
-
+        return df_final.dropna(subset=['Data_dt'])
     except Exception as e:
         st.error(f"Errore caricamento: {e}")
         return pd.DataFrame()
 
-# --- 4. LOGICA AI ---
+# --- 4. FUNZIONI AI ---
 
-def analyze_strategy(df_input):
+def ai_clustering_bulk(df_input):
+    """Analisi massiva per Tabella"""
     if df_input.empty: return pd.DataFrame()
-    
-    # Prepara subset
     df_subset = df_input.sort_values(by='Entrate', ascending=False).head(20)
-    
-    # Colonne sicure
     cols = ['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate']
-    for c in cols:
+    for c in cols: 
         if c not in df_subset.columns: df_subset[c] = 0
         
     data_json = df_subset[cols].to_dict(orient='records')
-    
     prompt = f"""
-    Analizza questi dati: {json.dumps(data_json)}.
-    Per ogni prodotto, decidi: "Aumentare Margine", "Attacco", "Monitorare", "Liquidare".
-    Regole:
-    - Attacco: Rank > 1 e differenza prezzo bassa.
-    - Margine: Rank = 1 e prezzo molto inferiore al competitor.
-    Output JSON Array: [{{ "Sku": "...", "Azione": "...", "Motivazione": "..." }}]
+    Analizza: {json.dumps(data_json)}.
+    Per ogni SKU definisci Categoria: "Attacco" (Rank>1, gap basso), "Margine" (Rank=1, gap alto), "Monitorare", "Liquidare".
+    Output JSON: [{{ "Sku": "...", "Categoria": "..." }}]
     """
-    
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         res = model.generate_content(prompt)
         clean = clean_json_response(res.text)
         return pd.DataFrame(json.loads(clean))
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
+
+def ai_predictive_strategy(hist_data, current_data):
+    """Analisi singola per Tab Focus"""
+    trend_desc = "Stabile"
+    if len(hist_data) > 1:
+        start_p = hist_data.iloc[0]['Price']
+        end_p = hist_data.iloc[-1]['Price']
+        if end_p < start_p: trend_desc = "In discesa"
+        elif end_p > start_p: trend_desc = "In salita"
+
+    prompt = f"""
+    Analisi Prodotto: {current_data['Product']}
+    - Prezzo Nostro: {current_data['Price']}€
+    - Competitor: {current_data['Comp_1_Prezzo']}€
+    - Posizione: {current_data['Rank']}
+    - Trend Storico: {trend_desc}
+    
+    Il competitor è aggressivo? Conviene abbassare il prezzo o mantenere il margine?
+    Rispondi in 3 righe, sii diretto e operativo.
+    """
+    try:
+        model = genai.GenerativeModel(MODEL_NAME)
+        res = model.generate_content(prompt)
+        return res.text
+    except Exception as e: return f"Errore AI: {e}"
 
 # --- 5. UI PRINCIPALE ---
 
 df_raw = load_data()
+if df_raw.empty: st.stop()
 
-if df_raw.empty:
-    st.warning("⚠️ Database vuoto o errore lettura.")
-    st.stop()
-
-# Snapshot ultima data
+# Snapshot dati attuali
 df_latest = df_raw.sort_values('Data_dt').drop_duplicates('Sku', keep='last').copy()
 
 with st.sidebar:
-    st.title("Sensation AI")
-    
+    st.image("logosensation.png") if "logosensation.png" in st.secrets else st.title("Sensation AI")
     brands = sorted(list(set([str(p).split()[0] for p in df_latest['Product'] if p])))
     sel_brand = st.selectbox("Brand", ["Tutti"] + brands)
     
-    if "ai_results" not in st.session_state:
-        st.session_state.ai_results = pd.DataFrame()
-        
-    if st.button("✨ Analisi AI"):
-        with st.spinner("Analisi in corso..."):
-            df_in = df_latest if sel_brand == "Tutti" else df_latest[df_latest['Product'].str.startswith(sel_brand)]
-            st.session_state.ai_results = analyze_strategy(df_in)
-            
-    if st.button("🔄 Refresh"):
-        st.cache_data.clear()
-        st.rerun()
+    st.divider()
+    
+    # Bottone Cluster nella sidebar che salva in session state
+    if "ai_clusters" not in st.session_state:
+        st.session_state.ai_clusters = pd.DataFrame()
 
-# Filtri Dashboard
+    if st.button("✨ Genera Clustering AI"):
+        with st.spinner("Analisi massiva in corso..."):
+            df_in = df_latest if sel_brand == "Tutti" else df_latest[df_latest['Product'].str.startswith(sel_brand)]
+            st.session_state.ai_clusters = ai_clustering_bulk(df_in)
+
+# Filtro Dataset
 df_view = df_latest.copy()
 if sel_brand != "Tutti":
     df_view = df_view[df_view['Product'].str.startswith(sel_brand)]
 
-# KPI Calculation (Safe)
-try:
-    df_view['Price_Index'] = df_view.apply(
-        lambda x: (x['Price'] / x['Comp_1_Prezzo'] * 100) if x['Comp_1_Prezzo'] > 0 else 0, 
-        axis=1
-    )
-except:
-    df_view['Price_Index'] = 0
+st.title("🚀 Control Tower Sensation")
 
-win_rate = (df_view['Rank'] == 1).mean()
-tot_rev = df_view['Entrate'].sum()
+# --- DASHBOARD LAYOUT RICHIESTO ---
+tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 Focus & AI Prediction"])
 
-# Visualizzazione
-st.title("📊 Control Tower")
-c1, c2, c3 = st.columns(3)
-c1.metric("Win Rate", f"{win_rate:.1%}")
-c2.metric("Price Index", f"{df_view['Price_Index'].mean():.1f}%")
-c3.metric("Fatturato (30gg)", f"€ {tot_rev:,.0f}")
+with tab1:
+    # 1. KPI
+    # Nota: Usiamo 'Rank' e 'Price' perché li abbiamo rinominati in load_data per stabilità
+    c1, c2, c3, c4 = st.columns(4)
+    win_rate = (df_view['Rank'] == 1).mean()
+    c1.metric("Win Rate", f"{win_rate:.1%}")
+    c2.metric("Pos. Media", f"{df_view['Rank'].mean():.1f}")
+    c3.metric("Prezzo Medio", f"{df_view['Price'].mean():.2f} €")
+    c4.metric("SKU Analizzati", len(df_view))
 
-t1, t2, t3 = st.tabs(["Performance", "Strategia AI", "Dati"])
+    st.divider()
 
-with t1:
+    # 2. Grafico Comparativo
+    st.subheader("Sensation vs Competitor (Top 10)")
+    # Ordiniamo per entrate o per gap prezzo per mostrare i più rilevanti
+    df_chart = df_view.sort_values('Entrate', ascending=False).head(10)
     
-    fig = px.scatter(
-        df_view[df_view['Price'] > 0], 
-        x="Price_Index", y="Entrate", size="Vendite", color="Rank",
-        hover_name="Product", range_x=[80, 120], color_continuous_scale="RdYlGn_r"
+    # Rinominiamo solo per la visualizzazione del grafico per renderlo chiaro
+    df_chart_display = df_chart.rename(columns={'Price': 'Sensation_Prezzo'})
+    
+    fig_bar = px.bar(
+        df_chart_display, 
+        x='Product', 
+        y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
+        barmode='group', 
+        color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'},
+        title="Confronto Prezzi Top Seller"
     )
-    fig.add_vline(x=100, line_dash="dash")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-with t2:
-    if not st.session_state.ai_results.empty:
-        st.dataframe(st.session_state.ai_results, hide_index=True, use_container_width=True)
+    # 3. Tabella con logica Merge AI
+    st.subheader("📋 Piano d'Azione")
+    df_display = df_view.copy()
+    
+    # Se abbiamo risultati AI in memoria, facciamo il merge
+    if not st.session_state.ai_clusters.empty:
+        df_display = df_display.merge(st.session_state.ai_clusters, on='Sku', how='left')
+        df_display['Classificazione AI'] = df_display['Categoria'].fillna("-")
     else:
-        st.info("Premi 'Analisi AI' nella sidebar.")
+        df_display['Classificazione AI'] = "Clicca 'Genera Clustering' nella sidebar"
 
-with t3:
-    cols = ['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate', 'Data_dt']
-    # Mostra solo colonne esistenti per evitare errori
-    valid_cols = [c for c in cols if c in df_view.columns]
-    st.dataframe(df_view[valid_cols], use_container_width=True)
+    # Selezione colonne da mostrare
+    cols_to_show = ['Sku', 'Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Classificazione AI', 'Entrate']
+    
+    # Rinominiamo colonne header per l'utente finale
+    df_show = df_display[cols_to_show].rename(columns={
+        'Rank': 'Sensation_Posizione',
+        'Price': 'Sensation_Prezzo'
+    })
+    
+    st.dataframe(
+        df_show.sort_values('Entrate', ascending=False), 
+        use_container_width=True, 
+        hide_index=True
+    )
+
+with tab2:
+    st.subheader("🔍 Analisi Predittiva Singolo SKU")
+    
+    # Selectbox Prodotti
+    prod_list = df_view['Product'].unique()
+    selected_prod = st.selectbox("Seleziona Prodotto:", prod_list)
+    
+    if selected_prod:
+        # Dati puntuali
+        p_data = df_view[df_view['Product'] == selected_prod].iloc[0]
+        # Dati storici (dal dataframe raw completo)
+        h_data = df_raw[df_raw['Product'] == selected_prod].sort_values('Data_dt')
+
+        col_info, col_ai = st.columns([1, 1])
+        with col_info:
+            st.info(
+                f"**{selected_prod}**\n\n"
+                f"💰 Prezzo Attuale: **{p_data['Price']}€**\n\n"
+                f"🏆 Posizione: **{p_data['Rank']}°**\n\n"
+                f"🆚 Competitor: **{p_data['Comp_1_Prezzo']}€**"
+            )
+        
+        with col_ai:
+            if st.button("🚀 Analizza con AI (Deep Dive)"):
+                with st.spinner("L'AI sta studiando lo storico..."):
+                    analisi = ai_predictive_strategy(h_data, p_data)
+                    st.success(f"**Consiglio AI:**\n\n{analisi}")
+        
+        # Grafico Trend
+        
+        fig_line = px.line(
+            h_data, 
+            x='Data_dt', 
+            y=['Price', 'Comp_1_Prezzo'], 
+            markers=True,
+            color_discrete_map={'Price': '#0056b3', 'Comp_1_Prezzo': '#ffa500'},
+            title="Trend Storico Prezzi"
+        )
+        # Rinomina legenda per chiarezza
+        new_names = {'Price': 'Sensation', 'Comp_1_Prezzo': 'Competitor'}
+        fig_line.for_each_trace(lambda t: t.update(name = new_names[t.name],
+                                      legendgroup = new_names[t.name],
+                                      hovertemplate = t.hovertemplate.replace(t.name, new_names[t.name])
+                                     )
+                  )
+        
+        st.plotly_chart(fig_line, use_container_width=True)
