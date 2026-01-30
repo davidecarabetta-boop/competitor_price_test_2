@@ -3,12 +3,13 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import google.generativeai as genai
 import gspread
 import json
-import re
-from datetime import date
 import os
+from datetime import date
+
+# --- IMPORTA IL TUO NUOVO FILE UTILS ---
+import utils 
 
 # --- 1. CONFIGURAZIONE ---
 st.set_page_config(page_title="Sensation AI Pricing Tower", layout="wide", page_icon="📈")
@@ -17,31 +18,9 @@ if "gcp_service_account" not in st.secrets or "gemini_api_key" not in st.secrets
     st.error("⛔ Configurazione mancante in secrets.toml")
     st.stop()
 
-genai.configure(api_key=st.secrets["gemini_api_key"])
-MODEL_NAME = 'gemini-1.5-flash'
+# Nota: Non serve più genai.configure qui, lo facciamo dentro utils quando serve.
 
-# --- 2. FUNZIONI UTILITÀ ---
-def clean_currency(value):
-    if pd.isna(value) or str(value).strip() == '': return 0.0
-    if isinstance(value, (int, float)): return float(value)
-    s = str(value).replace('€', '').replace('$', '').strip()
-    try:
-        if ',' in s and '.' in s:
-            if s.find('.') < s.find(','): s = s.replace('.', '').replace(',', '.')
-            else: s = s.replace(',', '')
-        elif ',' in s: s = s.replace(',', '.')
-        return float(s)
-    except: return 0.0
-
-def clean_json_response(text):
-    text = text.strip()
-    if "```" in text:
-        pattern = r"```(?:json)?(.*?)```"
-        match = re.search(pattern, text, re.DOTALL)
-        if match: text = match.group(1).strip()
-    return text
-
-# --- 3. CARICAMENTO DATI ---
+# --- 2. CARICAMENTO DATI (Ottimizzato con utils) ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -50,6 +29,7 @@ def load_data():
         sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
         
         # Carica Prezzi
+        # Usiamo sheet1 come da tuo codice originale
         df_p = pd.DataFrame(sh.sheet1.get_all_records())
         if df_p.empty: return pd.DataFrame()
 
@@ -76,18 +56,22 @@ def load_data():
         if 'Rank' not in df_p.columns: df_p['Rank'] = 99
         if 'Comp_1_Prezzo' not in df_p.columns: df_p['Comp_1_Prezzo'] = 0.0
         
-        for col in ['Price', 'Comp_1_Prezzo']: df_p[col] = df_p[col].apply(clean_currency)
+        # --- MODIFICA: USIAMO UTILS.CLEAN_CURRENCY ---
+        for col in ['Price', 'Comp_1_Prezzo']: 
+            df_p[col] = df_p[col].apply(utils.clean_currency)
+            
         df_p['Rank'] = pd.to_numeric(df_p['Rank'], errors='coerce').fillna(99).astype(int)
 
         if not df_r.empty:
             for col in ['Entrate', 'Vendite']:
-                if col in df_r.columns: df_r[col] = df_r[col].apply(clean_currency)
+                if col in df_r.columns: 
+                    # --- MODIFICA: USIAMO UTILS.CLEAN_CURRENCY ---
+                    df_r[col] = df_r[col].apply(utils.clean_currency)
 
         # Merge
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # --- NUOVA GESTIONE DATA (FIX) ---
-        # Cerchiamo la colonna 'Data' specifica del foglio storico
+        # Gestione Data
         if 'Data' in df_final.columns:
             df_final['Data_dt'] = pd.to_datetime(df_final['Data'], dayfirst=True, errors='coerce')
         elif 'Data_esecuzione' in df_final.columns:
@@ -95,7 +79,6 @@ def load_data():
         else:
             df_final['Data_dt'] = pd.Timestamp.now()
             
-        # Normalizziamo (rimuoviamo l'ora) per permettere il raggruppamento corretto
         df_final['Data_dt'] = df_final['Data_dt'].dt.normalize()
             
         if 'Categoria' not in df_final.columns:
@@ -106,48 +89,7 @@ def load_data():
         st.error(f"Errore caricamento: {e}")
         return pd.DataFrame()
 
-# --- 4. FUNZIONI AI ---
-def ai_clustering_bulk(df_input):
-    if df_input.empty: return pd.DataFrame()
-    df_subset = df_input.sort_values(by='Entrate', ascending=False).head(20)
-    cols = ['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate']
-    for c in cols: 
-        if c not in df_subset.columns: df_subset[c] = 0
-    
-    data_json = df_subset[cols].to_dict(orient='records')
-    prompt = f"""
-    Analizza: {json.dumps(data_json)}.
-    Definisci Categoria Strategica: "Attacco", "Margine", "Monitorare", "Liquidare".
-    Output JSON: [{{ "Sku": "...", "Categoria": "..." }}]
-    """
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        res = model.generate_content(prompt)
-        clean = clean_json_response(res.text)
-        return pd.DataFrame(json.loads(clean))
-    except: return pd.DataFrame()
-
-def ai_predictive_strategy(hist_data, current_data):
-    trend = "Stabile"
-    if len(hist_data) > 1:
-        start, end = hist_data.iloc[0]['Price'], hist_data.iloc[-1]['Price']
-        if end < start: trend = "In discesa"
-        elif end > start: trend = "In salita"
-
-    prompt = f"""
-    Prodotto: {current_data['Product']}
-    Prezzo: {current_data['Price']}€ (Pos: {current_data['Rank']})
-    Competitor: {current_data['Comp_1_Prezzo']}€
-    Trend: {trend}
-    Consiglia strategia breve (3 righe).
-    """
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        res = model.generate_content(prompt)
-        return res.text
-    except Exception as e: return f"Errore AI: {e}"
-
-# --- 5. INTERFACCIA E FILTRI ---
+# --- 3. INTERFACCIA E FILTRI ---
 df_raw = load_data()
 if df_raw.empty: st.stop()
 
@@ -157,13 +99,20 @@ with st.sidebar:
     else:
         st.title("Sensation AI")
 
-    min_date = df_raw['Data_dt'].min().date()
-    max_date = df_raw['Data_dt'].max().date()
+    # Gestione Date
+    dates = sorted(df_raw['Data_dt'].dropna().unique())
+    if not dates:
+        st.error("Nessuna data valida trovata.")
+        st.stop()
+        
+    min_date = dates[0].date()
+    max_date = dates[-1].date()
     
     if min_date == max_date:
         st.info(f"📅 Dati del: {min_date}")
         start_date, end_date = min_date, max_date
     else:
+        # Default sugli ultimi dati disponibili
         date_range = st.date_input("Seleziona Periodo", [min_date, max_date])
         if len(date_range) == 2:
             start_date, end_date = date_range
@@ -180,22 +129,25 @@ with st.sidebar:
     all_cats = sorted(df_latest['Categoria'].astype(str).unique())
     sel_cats = st.multiselect("Categoria", all_cats, default=[])
 
+    # Slider Prezzi e Revenue (Gestione casi min=max)
     min_p, max_p = int(df_latest['Price'].min()), int(df_latest['Price'].max())
-    if min_p == max_p: price_range = (min_p, max_p)
-    else: price_range = st.slider("Fascia di Prezzo (€)", min_p, max_p, (min_p, max_p))
+    price_range = st.slider("Fascia di Prezzo (€)", min_p, max_p, (min_p, max_p)) if min_p < max_p else (min_p, max_p)
 
     min_r, max_r = int(df_latest['Entrate'].min()), int(df_latest['Entrate'].max())
-    if min_r == max_r: revenue_range = (min_r, max_r)
-    else: revenue_range = st.slider("Entrate Generate (€)", min_r, max_r, (min_r, max_r))
+    revenue_range = st.slider("Entrate Generate (€)", min_r, max_r, (min_r, max_r)) if min_r < max_r else (min_r, max_r)
 
     min_v, max_v = int(df_latest['Vendite'].min()), int(df_latest['Vendite'].max())
-    if min_v == max_v: sales_range = (min_v, max_v)
-    else: sales_range = st.slider("Numero Vendite", min_v, max_v, (min_v, max_v))
+    sales_range = st.slider("Numero Vendite", min_v, max_v, (min_v, max_v)) if min_v < max_v else (min_v, max_v)
 
     st.divider()
+    
+    # --- MODIFICA: CHIAMATA AI SU UTILS ---
     if "ai_clusters" not in st.session_state: st.session_state.ai_clusters = pd.DataFrame()
+    
     if st.button("✨ Clustering AI"):
-        with st.spinner("Analisi..."): st.session_state.ai_clusters = ai_clustering_bulk(df_latest)
+        with st.spinner("Analisi di mercato in corso (Gemini)..."):
+            # Passiamo la chiave API dal secrets a utils
+            st.session_state.ai_clusters = utils.ai_clustering_bulk(df_latest, st.secrets["gemini_api_key"])
     
     if st.button("🔄 Reset Cache"):
         st.cache_data.clear()
@@ -241,26 +193,54 @@ with tab1:
 
     st.subheader("📋 Lista Prodotti")
     df_display = df_filtered.copy()
+    
+    # Merge con i Cluster AI se esistono
     if not st.session_state.ai_clusters.empty:
+        # Assicuriamoci che 'Sku' sia stringa per il merge
+        st.session_state.ai_clusters['Sku'] = st.session_state.ai_clusters['Sku'].astype(str)
         df_display = df_display.merge(st.session_state.ai_clusters, on='Sku', how='left')
-        df_display['Classificazione AI'] = df_display['Categoria'].fillna("-")
-    else: df_display['Classificazione AI'] = "-"
+        df_display['Classificazione AI'] = df_display['Cluster'].fillna("-") # 'Cluster' viene da utils.py
+    else: 
+        df_display['Classificazione AI'] = "-"
+        
     cols_show = ['Sku', 'Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Entrate', 'Vendite', 'Classificazione AI']
-    st.dataframe(df_display[cols_show].rename(columns={'Rank': 'Posizione', 'Price': 'Nostro Prezzo'}), use_container_width=True, hide_index=True)
+    # Filtriamo solo le colonne che esistono realmente
+    cols_exist = [c for c in cols_show if c in df_display.columns]
+    
+    st.dataframe(df_display[cols_exist].rename(columns={'Rank': 'Posizione', 'Price': 'Nostro Prezzo'}), use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("🔍 Analisi Storica e Predittiva")
     prods = df_filtered['Product'].unique()
     if len(prods) > 0:
         selected_prod = st.selectbox("Seleziona Prodotto:", prods)
+        
+        # Recupera la riga corrente e lo storico
         p_data = df_filtered[df_filtered['Product'] == selected_prod].iloc[0]
         h_data = df_period[df_period['Product'] == selected_prod].sort_values('Data_dt')
 
         c_info, c_ai = st.columns([1, 1])
-        with c_info: st.info(f"**{selected_prod}**\n\n💰 Prezzo: {p_data['Price']}€\n\n🏆 Posizione: {p_data['Rank']}°")
+        with c_info: 
+            st.info(f"**{selected_prod}**\n\n💰 Prezzo: {p_data['Price']}€\n\n🏆 Posizione: {p_data['Rank']}°")
+        
         with c_ai:
             if st.button("🚀 Analizza SKU"):
-                with st.spinner("AI al lavoro..."): st.success(ai_predictive_strategy(h_data, p_data))
+                with st.spinner("AI al lavoro..."): 
+                    # --- MODIFICA: CHIAMATA A UTILS.AI_STRATEGIC_ANALYSIS ---
+                    response_json = utils.ai_strategic_analysis(p_data, st.secrets["gemini_api_key"])
+                    
+                    try:
+                        res = json.loads(response_json)
+                        if "error" in res:
+                             st.error(res["error"])
+                        else:
+                            st.success(f"**Strategia:** {res.get('strategia', 'N/A')}")
+                            st.markdown(f"_{res.get('motivo', '')}_")
+                            if 'prezzo_consigliato' in res:
+                                st.metric("Prezzo Consigliato AI", f"€ {res['prezzo_consigliato']}")
+                    except json.JSONDecodeError:
+                        st.warning("Risposta AI non formattata correttamente, visualizzo raw text:")
+                        st.write(response_json)
 
         if not h_data.empty:
             fig_line = px.line(h_data.rename(columns={'Price': 'Sensation_Prezzo'}), x='Data_dt', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], markers=True, title="Andamento Prezzi")
@@ -280,7 +260,7 @@ with tab3:
         h_data_3 = df_period[df_period['Product'] == selected_prod_3].copy()
 
         if not h_data_3.empty:
-            # Raggruppiamo per giorno (Data_dt) per eliminare i duplicati orari e sommare le entrate
+            # Raggruppiamo per giorno
             h_data_3 = h_data_3.groupby('Data_dt').agg({
                 'Price': 'mean',
                 'Comp_1_Prezzo': 'mean',
@@ -304,7 +284,7 @@ with tab3:
                 secondary_y=False,
             )
 
-            # Area Entrate (Asse Y2)
+            # Area Entrate (Asse Y2) 
             fig_3.add_trace(
                 go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Entrate'], name="Entrate (€)",
                            fill='tozeroy', mode='none', fillcolor="rgba(40, 167, 69, 0.2)"),
