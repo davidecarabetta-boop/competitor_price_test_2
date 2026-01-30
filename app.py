@@ -3,11 +3,10 @@ import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
 import gspread
-from google.oauth2.service_account import Credentials
 import json
 import re
 
-# --- 1. CONFIGURAZIONE INIZIALE (DEVE ESSERE LA PRIMA ISTRUZIONE STREAMLIT) ---
+# --- 1. CONFIGURAZIONE INIZIALE (DEVE ESSERE LA PRIMA ISTRUZIONE) ---
 st.set_page_config(
     page_title="Sensation AI Pricing Tower",
     layout="wide",
@@ -42,9 +41,9 @@ def clean_currency(value):
     try:
         # Caso Italiano: 1.000,00 (punto migliaia, virgola decimali)
         if ',' in s and '.' in s:
-            if s.find('.') < s.find(','): # Formato EU: 1.000,50 -> togli punto, cambia virgola in punto
+            if s.find('.') < s.find(','): # Formato EU: 1.000,50
                 s = s.replace('.', '').replace(',', '.')
-            else: # Formato US errato ma possibile: 1,000.50 -> togli virgola
+            else: # Formato US errato ma possibile: 1,000.50
                 s = s.replace(',', '')
         elif ',' in s: # Solo virgola (presumibilmente decimale in IT)
             s = s.replace(',', '.')
@@ -68,12 +67,11 @@ def clean_json_response(text):
 @st.cache_data(ttl=600)
 def load_data():
     try:
-        # --- MODIFICA CRITICA PER FIX AUTH ---
-        # Invece di usare Credentials e scope manuali, usiamo il metodo nativo di gspread
+        # --- AUTENTICAZIONE ROBUSTA (Fix No access token) ---
         # Convertiamo i secrets in un dizionario standard Python
         creds_dict = dict(st.secrets["gcp_service_account"])
         
-        # gspread.service_account_from_dict gestisce auth e scope automaticamente
+        # gspread gestisce auth e scope automaticamente
         client = gspread.service_account_from_dict(creds_dict)
         
         sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
@@ -116,7 +114,7 @@ def load_data():
         # MERGE
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # --- FIX DATA ---
+        # --- FIX DATA (Gestione robusta colonna data) ---
         col_data_trovata = None
         if 'Data' in df_final.columns:
             col_data_trovata = 'Data'
@@ -126,6 +124,7 @@ def load_data():
         if col_data_trovata:
             df_final['Data_dt'] = pd.to_datetime(df_final[col_data_trovata], dayfirst=True, errors='coerce')
         else:
+            # Fallback se manca la colonna data
             df_final['Data_dt'] = pd.Timestamp.now()
         
         df_final = df_final.dropna(subset=['Data_dt'])
@@ -134,18 +133,18 @@ def load_data():
 
     except Exception as e:
         st.error(f"❌ Errore critico nel caricamento dati: {str(e)}")
-        # Stampa l'errore completo nei log della console per debug
         print(f"DEBUG ERROR: {e}")
-        return pd.DataFrame()DataFrame()
+        # Restituisce un DataFrame vuoto per evitare crash
+        return pd.DataFrame() 
 
 # --- 4. LOGICA AI ---
 
 def analyze_strategy(df_input):
     """Chiama Gemini per analizzare la strategia di prezzo."""
-    # Limitiamo ai top 20 prodotti per revenue o importanza per non saturare l'API
+    # Top 20 prodotti per entrate
     df_subset = df_input.sort_values(by='Entrate', ascending=False).head(20)
     
-    # Prepariamo i dati minimi per l'AI
+    # Dati minimi per AI
     data_for_ai = df_subset[['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate']].to_dict(orient='records')
     
     prompt = f"""
@@ -178,8 +177,7 @@ if df_raw.empty:
     st.warning("⚠️ Nessun dato disponibile. Controlla il Foglio Google e assicurati che contenga dati.")
     st.stop()
 
-# 2. Creazione Snapshot Ultima Rilevazione (per la Dashboard)
-# Ordina per data e tiene l'ultima occorrenza di ogni SKU
+# 2. Snapshot (Ultima data disponibile per SKU)
 df_latest = df_raw.sort_values('Data_dt').drop_duplicates('Sku', keep='last').copy()
 
 # Sidebar
@@ -193,7 +191,7 @@ with st.sidebar:
     
     st.divider()
     
-    # Gestione AI (Session State per non perdere i risultati al refresh)
+    # AI Session State
     if "ai_results" not in st.session_state:
         st.session_state.ai_results = pd.DataFrame()
         
@@ -206,19 +204,17 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# Filtraggio Dati Dashboard
+# Filtraggio
 df_view = df_latest.copy()
 if sel_brand != "Tutti":
     df_view = df_view[df_view['Product'].str.startswith(sel_brand)]
 
-# Calcolo KPI
-# Price Index: 100 = Parità. <100 = Siamo economici. >100 = Siamo cari.
+# KPI
 df_view['Price_Index'] = df_view.apply(lambda x: (x['Price'] / x['Comp_1_Prezzo'] * 100) if x['Comp_1_Prezzo'] > 0 else 0, axis=1)
-
 win_rate = (df_view['Rank'] == 1).mean()
 total_rev = df_view['Entrate'].sum()
 
-# Layout Dashboard
+# Dashboard Layout
 st.title("📊 Control Tower")
 col1, col2, col3 = st.columns(3)
 col1.metric("Win Rate (Pos. 1)", f"{win_rate:.1%}")
@@ -232,7 +228,6 @@ tab1, tab2, tab3 = st.tabs(["📈 Analisi Mercato", "🤖 Strategia AI", "📋 D
 
 with tab1:
     st.subheader("Posizionamento Prezzo vs Fatturato")
-    # Grafico a bolle: Asse X=Indice Prezzo, Asse Y=Fatturato, Dimensione=Vendite
     fig = px.scatter(
         df_view[df_view['Price'] > 0], 
         x="Price_Index", 
@@ -240,7 +235,7 @@ with tab1:
         size="Vendite", 
         color="Rank",
         hover_name="Product", 
-        range_x=[80, 120], # Focus sull'area +/- 20% dal competitor
+        range_x=[80, 120],
         color_continuous_scale="RdYlGn_r", 
         title="Distribuzione Competitiva"
     )
@@ -250,7 +245,6 @@ with tab1:
 with tab2:
     st.subheader("Suggerimenti Strategici AI")
     if not st.session_state.ai_results.empty:
-        # Uniamo i risultati AI con i dati prodotto per mostrare il contesto
         res_display = st.session_state.ai_results
         st.dataframe(res_display, use_container_width=True, hide_index=True)
     else:
@@ -258,8 +252,12 @@ with tab2:
 
 with tab3:
     st.subheader("Database Prodotti")
+    cols_show = ['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate', 'Data_dt']
+    # Mostra solo colonne esistenti
+    valid_cols = [c for c in cols_show if c in df_view.columns]
+    
     st.dataframe(
-        df_view[['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate', 'Data_dt']], 
+        df_view[valid_cols], 
         use_container_width=True,
         hide_index=True
     )
