@@ -1,172 +1,321 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from google.oauth2.service_account import Credentials
-import gspread
 import google.generativeai as genai
+import gspread
+from google.oauth2.service_account import Credentials
 import json
+import re
 
-# --- 1. CONFIGURAZIONE AI ---
-# Assicurati che 'gemini_api_key' sia presente nei tuoi Streamlit Secrets
+# --- 1. CONFIGURAZIONE INIZIALE ---
+st.set_page_config(
+    page_title="Sensation AI Pricing Tower",
+    layout="wide",
+    page_icon="📈",
+    initial_sidebar_state="expanded"
+)
+
+# Verifica Secrets
+if "gcp_service_account" not in st.secrets or "gemini_api_key" not in st.secrets:
+    st.error("⛔ Manca la configurazione in `.streamlit/secrets.toml`.")
+    st.stop()
+
+# Configurazione AI
 genai.configure(api_key=st.secrets["gemini_api_key"])
-model = genai.GenerativeModel('gemini-2.5-flash')
+MODEL_NAME = 'gemini-1.5-flash' # Usa 1.5 Flash (veloce ed economico) o 2.0-flash-exp se disponibile
 
-# --- CONFIGURAZIONE UI ---
-LOGO_PATH = "logosensation.png" 
-st.set_page_config(page_title="Sensation AI Pricing", layout="wide", page_icon="📈")
+# --- 2. FUNZIONI DI UTILITÀ (CLEANING) ---
 
-# --- 2. FUNZIONE CARICAMENTO DATI ---
+def clean_currency(value):
+    """
+    Converte stringhe come '1.200,50 €' o '1,200.50' in float puri.
+    Gestisce formattazione italiana e anglosassone.
+    """
+    if pd.isna(value) or value == '':
+        return 0.0
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    # Rimuovi simboli di valuta e spazi
+    s = str(value).replace('€', '').replace('$', '').replace('£', '').strip()
+    
+    try:
+        # Caso Italiano: 1.000,00 (punto migliaia, virgola decimali)
+        if ',' in s and '.' in s:
+            if s.find('.') < s.find(','): # Formato EU: 1.000,50
+                s = s.replace('.', '').replace(',', '.')
+            else: # Formato US errato ma possibile: 1,000.50
+                s = s.replace(',', '')
+        elif ',' in s: # Solo virgola (presumibilmente decimale in IT)
+            s = s.replace(',', '.')
+            
+        return float(s)
+    except:
+        return 0.0
+
+def clean_json_response(text):
+    """Pulisce la risposta dell'AI dai tag Markdown per estrarre il JSON puro."""
+    text = text.strip()
+    # Rimuove ```json all'inizio e ``` alla fine
+    if "```" in text:
+        pattern = r"```(?:json)?(.*?)```"
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+    return text
+
+# --- 3. CARICAMENTO DATI ---
+
 @st.cache_data(ttl=600)
 def load_data():
     try:
+        # Autenticazione
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         client = gspread.authorize(creds)
-        sheet = client.open_by_url(st.secrets["google_sheets"]["sheet_url"]).sheet1
-        raw_data = sheet.get_all_values()
         
-        if not raw_data: return pd.DataFrame()
+        sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
         
-        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-        df.columns = df.columns.str.strip()
+        # 1. Dati Prezzi (Foglio1)
+        data_p = sh.sheet1.get_all_records()
+        df_p = pd.DataFrame(data_p)
         
-        # Sincronizzazione SKU
-        df['Sku'] = df['Sku'].astype(str).str.strip()
+        # 2. Dati Entrate (Entrate) - Gestione se non esiste
+        try:
+            data_r = sh.worksheet("Entrate").get_all_records()
+            df_r = pd.DataFrame(data_r)
+        except:
+            df_r = pd.DataFrame(columns=['Sku', 'Entrate', 'Vendite'])
 
-        # PULIZIA DINAMICA PREZZI
-        # Identifica tutte le colonne che contengono "Prezzo" (es: Sensation_Prezzo, Comp_1_Prezzo, Comp_3_prezzo)
-        price_cols = [col for col in df.columns if 'prezzo' in col.lower()]
-        
-        for col in price_cols:
-            df[col] = (df[col].astype(str)
-                       .str.replace('€', '', regex=False)
-                       .str.replace('.', '', regex=False) # Rimuove separatore migliaia
-                       .str.replace(',', '.', regex=False) # Converte decimale per Python
-                       .str.strip())
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        # Pulizia Posizione
-        if 'Sensation_Posizione' in df.columns:
-            df['Sensation_Posizione'] = pd.to_numeric(df['Sensation_Posizione'], errors='coerce').fillna(0).astype(int)
+        # Standardizzazione Colonne
+        for df in [df_p, df_r]:
+            if not df.empty:
+                df.columns = df.columns.str.strip()
+                # Rinomina colonne critiche se necessario
+                col_map = {c: c for c in df.columns} # Identità per default
+                # Esempio: se hai 'Codice' invece di 'Sku', aggiungi qui il mapping
+                # col_map['Codice'] = 'Sku' 
+                df.rename(columns=col_map, inplace=True)
+                
+                if 'Sku' in df.columns:
+                    df['Sku'] = df['Sku'].astype(str).str.strip()
 
-        # Gestione Data
-        df['Data_dt'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
-        return df
+        # Pulizia Prezzi nel DataFrame principale
+        cols_to_clean = [c for c in df_p.columns if any(x in c.lower() for x in ['prezzo', 'price', 'costo'])]
+        for col in cols_to_clean:
+            df_p[col] = df_p[col].apply(clean_currency)
+            
+        # Pulizia Rank
+        if 'Rank' in df_p.columns:
+            df_p['Rank'] = pd.to_numeric(df_p['Rank'], errors='coerce').fillna(99).astype(int)
+
+        # Pulizia Entrate/Vendite nel DataFrame Revenue
+        if not df_r.empty:
+            for col in ['Entrate', 'Vendite']:
+                if col in df_r.columns:
+                    df_r[col] = df_r[col].apply(clean_currency)
+
+        # MERGE
+        df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
+        
+        # Data Handling
+        if 'Data_Esecuzione' in df_final.columns:
+            df_final['Data_dt'] = pd.to_datetime(df_final['Data_Esecuzione'], dayfirst=True, errors='coerce')
+        
+        return df_final
+
     except Exception as e:
-        st.error(f"Errore caricamento dati: {e}")
+        st.error(f"❌ Errore critico nel caricamento dati: {str(e)}")
         return pd.DataFrame()
 
+# --- 4. LOGICA AI ---
+
+def analyze_strategy(df_input):
+    """
+    Analizza i prodotti per suggerire azioni di prezzo.
+    """
+    # Prendiamo i top 20 prodotti per fatturato o criticità per non saturare l'API
+    df_subset = df_input.sort_values(by='Entrate', ascending=False).head(20)
+    
+    # Prepariamo un dizionario leggero
+    data_for_ai = df_subset[['Sku', 'Product', 'Price', 'Comp_1_Prezzo', 'Rank', 'Entrate']].to_dict(orient='records')
+    
+    prompt = f"""
+    Sei un Senior Pricing Analyst. Analizza questi dati di e-commerce:
+    {json.dumps(data_for_ai)}
+    
+    Per ogni prodotto, determina la "Azione Consigliata" tra:
+    1. "Aumentare Margine" (Se Rank=1 e siamo molto più economici del competitor)
+    2. "Attacco" (Se Rank > 1 e il prezzo competitor è vicino)
+    3. "Monitorare" (Situazione stabile)
+    4. "Liquidare" (Prezzo alto, zero vendite)
+    
+    Restituisci ESCLUSIVAMENTE un JSON array valido in questo formato:
+    [
+        {{"Sku": "sku_prodotto", "Azione": "Azione scelta", "Motivazione": "Breve spiegazione (max 10 parole)"}}
+    ]
+    Non aggiungere testo introduttivo.
+    """
+    
+    try:
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(prompt)
+        cleaned_text = clean_json_response(response.text)
+        return pd.DataFrame(json.loads(cleaned_text))
+    except Exception as e:
+        st.warning(f"⚠️ Analisi AI fallita: {str(e)}")
+        return pd.DataFrame()
+
+# --- 5. INTERFACCIA UTENTE (DASHBOARD) ---
+
+# Caricamento
 df_raw = load_data()
 
-# --- 3. LOGICA AI (ANALISI E PREVISIONE) ---
-
-def ai_clustering_bulk(df_input):
-    """Classifica i prodotti in base al gap di prezzo"""
-    data_to_send = df_input.head(30)[['Sku', 'Product', 'Sensation_Prezzo', 'Comp_1_Prezzo']].to_dict(orient='records')
-    
-    prompt = f"""
-    Analizza questi prodotti: {json.dumps(data_to_send)}.
-    Classificali come 'Prodotto Civetta' o 'Prodotto a Margine'.
-    Rispondi SOLO con una lista JSON. Esempio: [{{"Sku": "123", "Categoria": "Prodotto Civetta"}}]
-    """
-    try:
-        response = model.generate_content(prompt)
-        raw_text = response.text.strip()
-        if "```json" in raw_text:
-            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-        ai_data = json.loads(raw_text)
-        return pd.DataFrame(ai_data)
-    except:
-        return pd.DataFrame()
-
-def ai_predictive_strategy(hist_data, p_data):
-    """Analisi predittiva sul singolo prodotto"""
-    trend = hist_data.tail(10)[['Data', 'Sensation_Prezzo', 'Comp_1_Prezzo']].to_string()
-    prompt = f"""
-    Analizza trend: {p_data['Product']}. Sensation {p_data['Sensation_Prezzo']}€, Comp {p_data['Comp_1_Prezzo']}€.
-    Storico: {trend}
-    Prevedi: Il competitor sta finendo lo stock? Quale prezzo impostare domani? Max 40 parole.
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except:
-        return "Analisi non disponibile al momento."
-
-# --- 4. SIDEBAR E FILTRI ---
 if df_raw.empty:
-    st.error("Nessun dato trovato nel foglio Google.")
+    st.warning("Nessun dato disponibile. Controlla il foglio Google o lo script di sync.")
     st.stop()
 
-df_latest = df_raw.sort_values('Data_dt', ascending=True).drop_duplicates('Sku', keep='last').copy()
+# Prendiamo solo l'ultima rilevazione temporale per ogni SKU
+df_latest = df_raw.sort_values('Data_dt').drop_duplicates('Sku', keep='last').copy()
 
+# SIDEBAR
 with st.sidebar:
-    try: st.image(LOGO_PATH, use_container_width=True)
-    except: st.title("Sensation AI")
+    st.title("Sensation AI")
+    st.caption("Pricing Intelligence Suite")
+    st.divider()
     
-    st.header("🤖 AI Control")
-    brand_list = sorted(df_raw['Product'].str.split().str[0].unique())
-    selected_brands = st.multiselect("Brand", brand_list)
-    run_clustering = st.button("🪄 Genera Clustering AI")
+    # Filtri
+    brands = sorted(list(set([str(p).split()[0] for p in df_latest['Product'] if p])))
+    sel_brand = st.selectbox("Filtra Brand", ["Tutti"] + brands)
     
-    if st.button("🔄 Aggiorna"):
+    st.divider()
+    
+    # AI Control con Session State
+    if "ai_results" not in st.session_state:
+        st.session_state.ai_results = pd.DataFrame()
+        
+    if st.button("✨ Genera Strategia AI"):
+        with st.spinner("L'AI sta analizzando i margini..."):
+            # Filtriamo i dati attuali prima di mandarli all'AI
+            if sel_brand != "Tutti":
+                df_ai_input = df_latest[df_latest['Product'].str.startswith(sel_brand)]
+            else:
+                df_ai_input = df_latest
+            
+            st.session_state.ai_results = analyze_strategy(df_ai_input)
+            
+    if st.button("🔄 Aggiorna Dati"):
         st.cache_data.clear()
         st.rerun()
 
-df = df_latest.copy()
-if selected_brands:
-    df = df[df['Product'].str.startswith(tuple(selected_brands))]
+# FILTRAGGIO MAIN
+if sel_brand != "Tutti":
+    df_view = df_latest[df_latest['Product'].str.startswith(sel_brand)].copy()
+else:
+    df_view = df_latest.copy()
 
-# --- 5. DASHBOARD LAYOUT ---
-tab1, tab2 = st.tabs(["📊 Market Intelligence", "🔍 Focus & AI Prediction"])
+# CALCOLO KPI
+# Price Index: (Nostro Prezzo / Prezzo Competitor) * 100
+df_view['Price_Index'] = df_view.apply(lambda x: (x['Price'] / x['Comp_1_Prezzo'] * 100) if x['Comp_1_Prezzo'] > 0 else 0, axis=1)
 
+win_rate = (df_view['Rank'] == 1).mean()
+total_rev = df_view['Entrate'].sum()
+# Opportunity Lost: Fatturato potenziale (20% stimato) su prodotti popolari dove non siamo primi
+opp_mask = (df_view['Rank'] > 1) & (df_view['Popularity'] > 0) & (df_view['Popularity'] <= 20)
+opp_lost = df_view[opp_mask]['Entrate'].sum() * 0.20 
+
+# LAYOUT DASHBOARD
+st.title("📊 Control Tower")
+st.markdown(f"**Ultimo Aggiornamento:** {df_view['Data_dt'].max().strftime('%d/%m/%Y') if not pd.isnull(df_view['Data_dt'].max()) else 'N/D'}")
+
+# KPI CARDS
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Win Rate (Pos. 1)", f"{win_rate:.1%}", delta="vs Competitor")
+col2.metric("Price Index Medio", f"{df_view[df_view['Price_Index']>0]['Price_Index'].mean():.1f}", help="< 100: Più economici dei competitor")
+col3.metric("Fatturato (Mensile)", f"€ {total_rev:,.0f}")
+col4.metric("Opportunity Lost", f"€ {opp_lost:,.0f}", delta="Recuperabile", delta_color="inverse")
+
+st.divider()
+
+# TABS
+tab1, tab2, tab3 = st.tabs(["📈 Analisi Mercato", "🤖 Strategia AI", "📋 Dettaglio Dati"])
+
+# TAB 1: GRAFICI
 with tab1:
-    # KPI
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Win Rate", f"{(df['Sensation_Posizione'] == 1).mean():.1%}")
-    c2.metric("Pos. Media", f"{df['Sensation_Posizione'].mean():.1f}")
-    c3.metric("Prezzo Medio", f"{df['Sensation_Prezzo'].mean():.2f} €")
-    c4.metric("SKU Analizzati", len(df))
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.subheader("Matrice Competitiva")
+        # Scatter Plot
+        fig = px.scatter(
+            df_view[df_view['Price'] > 0],
+            x="Price_Index",
+            y="Entrate",
+            size="Vendite",
+            color="Rank",
+            hover_name="Product",
+            hover_data=["Price", "Comp_1_Prezzo"],
+            range_x=[80, 120], # Focus sull'area critica +/- 20%
+            color_continuous_scale="RdYlGn_r", # Verde=Rank 1, Rosso=Rank Alto
+            title="Posizionamento Prezzo vs Fatturato"
+        )
+        fig.add_vline(x=100, line_dash="dash", annotation_text="Parità Prezzo")
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c2:
+        st.subheader("Top Competitor")
+        if 'Comp_1_Nome' in df_view.columns:
+            top_comps = df_view['Comp_1_Nome'].value_counts().head(5)
+            st.bar_chart(top_comps)
+        else:
+            st.info("Dati nomi competitor non disponibili")
 
-    st.divider()
-
-    # Grafico
-    st.subheader("Sensation vs Competitor (Top 10)")
-    fig_bar = px.bar(df.head(10), x='Product', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
-                     barmode='group', color_discrete_map={'Sensation_Prezzo': '#0056b3', 'Comp_1_Prezzo': '#ffa500'})
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-    # Tabella con logica Merge AI
-    st.subheader("📋 Piano d'Azione")
-    df_display = df.copy()
-    if run_clustering:
-        with st.spinner("L'AI sta analizzando i dati..."):
-            results = ai_clustering_bulk(df_display)
-            if not results.empty:
-                df_display = df_display.merge(results, on='Sku', how='left')
-                df_display['Classificazione AI'] = df_display['Categoria'].fillna("Analisi non prioritaria")
-            else:
-                df_display['Classificazione AI'] = "Errore AI"
-    else:
-        df_display['Classificazione AI'] = "Clicca 'Genera Clustering'"
-
-    st.dataframe(df_display[['Sku', 'Product', 'Sensation_Posizione', 'Sensation_Prezzo', 'Comp_1_Prezzo', 'Classificazione AI']], use_container_width=True, hide_index=True)
-
+# TAB 2: AI INSIGHTS
 with tab2:
-    st.subheader("🔍 Analisi Predittiva")
-    selected_prod = st.selectbox("Seleziona Prodotto:", df['Product'].unique())
+    st.subheader("💡 Suggerimenti Intelligenza Artificiale")
     
-    p_data = df[df['Product'] == selected_prod].iloc[0]
-    h_data = df_raw[df_raw['Product'] == selected_prod].sort_values('Data_dt')
+    if not st.session_state.ai_results.empty:
+        # Merge dei risultati AI con i dati prodotto per mostrare contesto
+        res = st.session_state.ai_results
+        
+        # Colorazione condizionale
+        def color_action(val):
+            color = 'black'
+            if val == 'Attacco': color = 'red'
+            elif val == 'Aumentare Margine': color = 'green'
+            elif val == 'Liquidare': color = 'orange'
+            return f'color: {color}; font-weight: bold'
 
-    col_info, col_ai = st.columns([1, 1])
-    with col_info:
-        st.info(f"**{selected_prod}**\n\nPrezzo Attuale: {p_data['Sensation_Prezzo']}€\n\nPosizione: {p_data['Sensation_Posizione']}°")
+        st.dataframe(
+            res.style.map(color_action, subset=['Azione']),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.markdown("---")
+        st.caption("Nota: L'AI analizza i Top 20 prodotti per impatto sul fatturato.")
+    else:
+        st.info("👈 Clicca su 'Genera Strategia AI' nella barra laterale per avviare l'analisi.")
+
+# TAB 3: DATA EDITOR
+with tab3:
+    st.subheader("Esplora Dati Completi")
     
-    with col_ai:
-        if st.button("🚀 Analizza con AI"):
-            analisi = ai_predictive_strategy(h_data, p_data)
-            st.success(f"**Consiglio AI:**\n\n{analisi}")
-
-    st.plotly_chart(px.line(h_data, x='Data', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], title="Trend Storico"), use_container_width=True)
+    # Setup colonne per editor
+    column_cfg = {
+        "Price": st.column_config.NumberColumn("Nostro Prezzo", format="€ %.2f"),
+        "Comp_1_Prezzo": st.column_config.NumberColumn("Miglior Competitor", format="€ %.2f"),
+        "Entrate": st.column_config.NumberColumn("Revenue", format="€ %.2f"),
+        "Url_Prodotto": st.column_config.LinkColumn("Link")
+    }
+    
+    # Filtriamo colonne inutili
+    cols_show = ['Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Entrate', 'Vendite', 'Popularity']
+    final_cols = [c for c in cols_show if c in df_view.columns]
+    
+    st.dataframe(
+        df_view[final_cols].sort_values('Entrate', ascending=False),
+        column_config=column_cfg,
+        use_container_width=True,
+        hide_index=True
+    )
