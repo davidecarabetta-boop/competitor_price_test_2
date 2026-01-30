@@ -68,10 +68,13 @@ def clean_json_response(text):
 @st.cache_data(ttl=600)
 def load_data():
     try:
-        # Autenticazione Google Sheets
-        scope = ['[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)', '[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)']
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-        client = gspread.authorize(creds)
+        # --- MODIFICA CRITICA PER FIX AUTH ---
+        # Invece di usare Credentials e scope manuali, usiamo il metodo nativo di gspread
+        # Convertiamo i secrets in un dizionario standard Python
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        
+        # gspread.service_account_from_dict gestisce auth e scope automaticamente
+        client = gspread.service_account_from_dict(creds_dict)
         
         sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
         
@@ -80,7 +83,6 @@ def load_data():
         df_p = pd.DataFrame(data_p)
         
         if df_p.empty:
-            # Ritorna DF vuoto strutturato se il foglio è vuoto
             return pd.DataFrame(columns=['Sku', 'Product', 'Data_dt', 'Entrate'])
 
         # 2. Dati Entrate (Foglio "Entrate")
@@ -88,10 +90,9 @@ def load_data():
             data_r = sh.worksheet("Entrate").get_all_records()
             df_r = pd.DataFrame(data_r)
         except:
-            # Se la tab non esiste, crea DF vuoto
             df_r = pd.DataFrame(columns=['Sku', 'Entrate', 'Vendite'])
 
-        # Standardizzazione Nomi Colonne (toglie spazi)
+        # Standardizzazione Nomi Colonne
         for df in [df_p, df_r]:
             if not df.empty:
                 df.columns = df.columns.str.strip()
@@ -112,11 +113,10 @@ def load_data():
                 if col in df_r.columns:
                     df_r[col] = df_r[col].apply(clean_currency)
 
-        # MERGE: Uniamo i dati storici con i dati di vendita
+        # MERGE
         df_final = df_p.merge(df_r, on='Sku', how='left').fillna(0)
         
-        # --- FIX DATA (Corregge il KeyError) ---
-        # Cerca 'Data' o 'Data_Esecuzione'
+        # --- FIX DATA ---
         col_data_trovata = None
         if 'Data' in df_final.columns:
             col_data_trovata = 'Data'
@@ -124,21 +124,19 @@ def load_data():
             col_data_trovata = 'Data_Esecuzione'
             
         if col_data_trovata:
-            # Converte la stringa data in oggetto datetime
             df_final['Data_dt'] = pd.to_datetime(df_final[col_data_trovata], dayfirst=True, errors='coerce')
         else:
-            # Se manca la colonna data, usa la data odierna per non crashare
-            # st.warning("Colonna Data non trovata, uso data odierna.")
             df_final['Data_dt'] = pd.Timestamp.now()
         
-        # Rimuove righe con data non valida (NaT)
         df_final = df_final.dropna(subset=['Data_dt'])
 
         return df_final
 
     except Exception as e:
         st.error(f"❌ Errore critico nel caricamento dati: {str(e)}")
-        return pd.DataFrame()
+        # Stampa l'errore completo nei log della console per debug
+        print(f"DEBUG ERROR: {e}")
+        return pd.DataFrame()DataFrame()
 
 # --- 4. LOGICA AI ---
 
