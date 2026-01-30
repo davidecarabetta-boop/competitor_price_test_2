@@ -167,7 +167,7 @@ df_filtered = df_filtered[
 ]
 
 # --- DASHBOARD ---
-st.title("🚀 Control Tower Sensation")
+st.title("Competitor monitoring - Sensation")
 st.markdown(f"**Prodotti visualizzati:** {len(df_filtered)} su {len(df_latest)}")
 
 tab1, tab2, tab3 = st.tabs(["📊 Market Intelligence", "🔍 Focus & AI Prediction", "📈 Price vs Revenue"])
