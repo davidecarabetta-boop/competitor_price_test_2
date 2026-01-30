@@ -49,7 +49,7 @@ def load_data():
         client = gspread.service_account_from_dict(creds_dict)
         sh = client.open_by_url(st.secrets["google_sheets"]["sheet_url"])
 
-        # 1. Carichiamo lo storico prezzi (Foglio 1)
+        # 1. Carichiamo tutto lo storico prezzi (Foglio 1)
         df_p = pd.DataFrame(sh.sheet1.get_all_records())
         if df_p.empty: return pd.DataFrame()
 
@@ -80,7 +80,6 @@ def load_data():
         # 3. GESTIONE DATE (Priorità colonna 'Data')
         for df in [df_p, df_r]:
             if not df.empty:
-                # Cerchiamo 'Data' o 'Data_esecuzione'
                 col_data = 'Data' if 'Data' in df.columns else ('Data_esecuzione' if 'Data_esecuzione' in df.columns else None)
                 if col_data:
                     df['Data_dt'] = pd.to_datetime(df[col_data], dayfirst=True, errors='coerce').dt.normalize()
@@ -90,7 +89,6 @@ def load_data():
         # 4. MERGE CRONOLOGICO (Sku + Data)
         df_final = df_p.merge(df_r, on=['Sku', 'Data_dt'], how='left', suffixes=('', '_r')).fillna(0)
 
-        # Gestione Categoria
         if 'Categoria' not in df_final.columns:
             df_final['Categoria'] = df_final.get('Category', 'Generale')
 
@@ -148,9 +146,19 @@ with st.sidebar:
     sel_brands = st.multiselect("Brand", sorted(list(set([str(p).split()[0] for p in df_latest['Product'] if p]))))
     sel_cats = st.multiselect("Categoria", sorted(df_latest['Categoria'].astype(str).unique()))
 
-    price_range = st.slider("Fascia di Prezzo (€)", int(df_latest['Price'].min()), int(df_latest['Price'].max()), (int(df_latest['Price'].min()), int(df_latest['Price'].max())))
-    revenue_range = st.slider("Entrate Generate (€)", int(df_latest['Entrate'].min()), int(df_latest['Entrate'].max()), (int(df_latest['Entrate'].min()), int(df_latest['Entrate'].max())))
-    sales_range = st.slider("Numero Vendite", int(df_latest['Vendite'].min()), int(df_latest['Vendite'].max()), (int(df_latest['Vendite'].min()), int(df_latest['Vendite'].max())))
+    # --- FIX SICUREZZA SLIDERS ---
+    def safe_slider(label, column, is_currency=False):
+        val_min = float(df_latest[column].min())
+        val_max = float(df_latest[column].max())
+        if val_min == val_max:
+            st.caption(f"{label}: {val_min:.2f}€" if is_currency else f"{label}: {val_min}")
+            return (val_min, val_max)
+        else:
+            return st.slider(label, val_min, val_max, (val_min, val_max))
+
+    price_range = safe_slider("Fascia di Prezzo (€)", "Price", True)
+    revenue_range = safe_slider("Entrate Generate (€)", "Entrate", True)
+    sales_range = safe_slider("Numero Vendite", "Vendite")
 
     st.divider()
     if st.button("✨ Clustering AI"):
@@ -163,7 +171,11 @@ with st.sidebar:
 df_filtered = df_latest.copy()
 if sel_brands: df_filtered = df_filtered[df_filtered['Product'].str.contains('|'.join(sel_brands), case=False, na=False)]
 if sel_cats: df_filtered = df_filtered[df_filtered['Categoria'].isin(sel_cats)]
-df_filtered = df_filtered[(df_filtered['Price'].between(price_range[0], price_range[1])) & (df_filtered['Entrate'].between(revenue_range[0], revenue_range[1])) & (df_filtered['Vendite'].between(sales_range[0], sales_range[1]))]
+df_filtered = df_filtered[
+    (df_filtered['Price'].between(price_range[0], price_range[1])) & 
+    (df_filtered['Entrate'].between(revenue_range[0], revenue_range[1])) & 
+    (df_filtered['Vendite'].between(sales_range[0], sales_range[1]))
+]
 
 # --- DASHBOARD ---
 st.title("🚀 Control Tower Sensation")
@@ -178,8 +190,7 @@ with tab1:
     
     st.subheader("📋 Lista Prodotti")
     df_display = df_filtered.copy()
-    df_display['Classificazione AI'] = df_display.merge(st.session_state.get('ai_clusters', pd.DataFrame()), on='Sku', how='left')['Categoria_y'].fillna("-") if 'ai_clusters' in st.session_state else "-"
-    st.dataframe(df_display[['Sku', 'Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Entrate', 'Classificazione AI']], use_container_width=True, hide_index=True)
+    st.dataframe(df_display[['Sku', 'Product', 'Rank', 'Price', 'Comp_1_Prezzo', 'Entrate']], use_container_width=True, hide_index=True)
 
 with tab2:
     prods = df_filtered['Product'].unique()
