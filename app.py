@@ -150,11 +150,14 @@ def ai_predictive_strategy(hist_data, current_data):
 df_raw = load_data()
 if df_raw.empty: st.stop()
 
-# Sidebar: Immagine e Titolo
 with st.sidebar:
-    st.image("logosensation.png") if "logosensation.png" in st.secrets else st.title("Sensation AI")
-    st.divider()
-    st.header("🔍 Pannello Filtri")
+    # Controlla se il file esiste fisicamente (metodo più sicuro)
+    import os
+    if os.path.exists("logosensation.png"):
+        st.image("logosensation.png", use_container_width=True)
+    else:
+        # Fallback se non trova l'immagine
+        st.title("Sensation AI")
 
     # --- 1. FILTRO DATA (Range) ---
     min_date = df_raw['Data_dt'].min().date()
