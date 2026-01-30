@@ -271,75 +271,61 @@ with tab3:
     prods_3 = df_filtered['Product'].unique()
     
     if len(prods_3) > 0:
-        selected_prod_3 = st.selectbox("Seleziona Prodotto per analisi entrate:", prods_3, key="sel_tab3")
+        selected_prod_3 = st.selectbox("Seleziona Prodotto per analisi:", prods_3, key="sel_tab3")
         
-        # Filtriamo lo storico per il prodotto selezionato
+        # 1. Filtriamo i dati storici per il prodotto (usando df_period per avere tutto l'intervallo)
         h_data_3 = df_period[df_period['Product'] == selected_prod_3].copy()
 
         if not h_data_3.empty:
-            # --- FIX: RAGGRUPPAMENTO PER DATA ---
-            # Questo assicura che se hai più righe per la stessa data, vengano unite
+            # 2. AGGREGAZIONE FONDAMENTALE: Uniamo i dati per data (rimuovendo l'ora)
+            # Questo risolve i punti isolati e la sovrapposizione sull'asse X
             h_data_3 = h_data_3.groupby('Data_dt').agg({
                 'Price': 'mean',
                 'Comp_1_Prezzo': 'mean',
                 'Entrate': 'sum'
             }).reset_index().sort_values('Data_dt')
 
-            # Creazione grafico con doppio asse Y
+            # 3. Creazione Grafico Dual-Axis
             fig_3 = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # Linea Prezzo Sensation (Asse Y1)
+            # Nostro Prezzo
             fig_3.add_trace(
-                go.Scatter(
-                    x=h_data_3['Data_dt'], 
-                    y=h_data_3['Price'], 
-                    name="Nostro Prezzo",
-                    mode='lines+markers', # Aggiungiamo markers per vedere i punti
-                    line=dict(color="#0056b3", width=3)
-                ),
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Price'], name="Nostro Prezzo",
+                           mode='lines+markers', line=dict(color="#0056b3", width=3)),
                 secondary_y=False,
             )
 
-            # Linea Prezzo Competitor (Asse Y1)
+            # Prezzo Competitor
             fig_3.add_trace(
-                go.Scatter(
-                    x=h_data_3['Data_dt'], 
-                    y=h_data_3['Comp_1_Prezzo'], 
-                    name="Prezzo Competitor",
-                    mode='lines+markers',
-                    line=dict(color="#ffa500", dash='dot')
-                ),
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Comp_1_Prezzo'], name="Prezzo Competitor",
+                           mode='lines+markers', line=dict(color="#ffa500", dash='dot')),
                 secondary_y=False,
             )
 
-            # Area Entrate (Asse Y2)
+            # Area Entrate (Verde)
             fig_3.add_trace(
-                go.Scatter(
-                    x=h_data_3['Data_dt'], 
-                    y=h_data_3['Entrate'], 
-                    name="Entrate (€)",
-                    fill='tozeroy', 
-                    mode='lines', # Area continua
-                    line=dict(color="rgba(40, 167, 69, 0.3)", width=0)
-                ),
+                go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Entrate'], name="Entrate (€)",
+                           fill='tozeroy', mode='none', fillcolor="rgba(40, 167, 69, 0.2)"),
                 secondary_y=True,
             )
 
-            # --- FIX: GESTIONE ASSE X ---
+            # 4. FIX ASSE X: Forza il formato data e la pulizia visiva
             fig_3.update_xaxes(
-                type='date', # Forza il tipo data
-                range=[start_date, end_date], # Forza il range selezionato nella sidebar
+                type='date',
                 tickformat="%d-%m",
-                dtick="D1" # Un tick per ogni giorno
+                dtick="D1", # Un segno per ogni giorno
+                tickangle=-45
             )
 
             fig_3.update_layout(
-                title_text=f"Analisi Prezzo vs Performance: {selected_prod_3}",
+                title_text=f"Performance Temporale: {selected_prod_3}",
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
 
-            fig_3.update_yaxes(title_text="<b>Prezzo</b> (€)", secondary_y=False)
-            fig_3.update_yaxes(title_text="<b>Entrate</b> (€)", secondary_y=True)
+            fig_3.update_yaxes(title_text="Prezzo (€)", secondary_y=False)
+            fig_3.update_yaxes(title_text="Entrate (€)", secondary_y=True)
 
             st.plotly_chart(fig_3, use_container_width=True)
+        else:
+            st.warning("Storico non trovato per questo prodotto.")
