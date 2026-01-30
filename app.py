@@ -235,7 +235,19 @@ with tab2:
 
         # Grafico Trend con nomi corretti
         df_plot = h_data.rename(columns={'Price': 'Sensation_Prezzo'})
-        fig_line = px.line(df_plot, x='Data_dt', y=['Sensation_Prezzo', 'Comp_1_Prezzo'], title="Trend Storico")
+        
+        # FIX: Aggiunto markers=True per vedere i punti anche se c'è un solo dato
+        fig_line = px.line(
+            df_plot, 
+            x='Data_dt', 
+            y=['Sensation_Prezzo', 'Comp_1_Prezzo'], 
+            title="Trend Storico",
+            markers=True 
+        )
+        
+        # Personalizzazione colori (Opzionale ma consigliata)
+        fig_line.update_traces(line=dict(width=3)) 
+        
         st.plotly_chart(fig_line, use_container_width=True)
     else:
         st.warning("Nessun prodotto trovato.")
