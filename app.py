@@ -273,48 +273,48 @@ with tab3:
     if len(prods_3) > 0:
         selected_prod_3 = st.selectbox("Seleziona Prodotto per analisi:", prods_3, key="sel_tab3")
         
-        # 1. Filtriamo i dati storici per il prodotto (usando df_period per avere tutto l'intervallo)
+        # Filtriamo i dati storici basandoci sul prodotto selezionato
         h_data_3 = df_period[df_period['Product'] == selected_prod_3].copy()
 
         if not h_data_3.empty:
-            # 2. AGGREGAZIONE FONDAMENTALE: Uniamo i dati per data (rimuovendo l'ora)
-            # Questo risolve i punti isolati e la sovrapposizione sull'asse X
+            # --- SOLUZIONE AL PROBLEMA DEI PUNTI ISOLATI ---
+            # Raggruppiamo per giorno per eliminare i micro-timestamp e sommare le entrate
             h_data_3 = h_data_3.groupby('Data_dt').agg({
                 'Price': 'mean',
                 'Comp_1_Prezzo': 'mean',
                 'Entrate': 'sum'
             }).reset_index().sort_values('Data_dt')
 
-            # 3. Creazione Grafico Dual-Axis
+            # Creazione grafico con doppio asse Y
             fig_3 = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # Nostro Prezzo
+            # Nostro Prezzo (Asse Y1) - Usiamo mode='lines+markers' per connettere i giorni
             fig_3.add_trace(
                 go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Price'], name="Nostro Prezzo",
                            mode='lines+markers', line=dict(color="#0056b3", width=3)),
                 secondary_y=False,
             )
 
-            # Prezzo Competitor
+            # Prezzo Competitor (Asse Y1)
             fig_3.add_trace(
                 go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Comp_1_Prezzo'], name="Prezzo Competitor",
                            mode='lines+markers', line=dict(color="#ffa500", dash='dot')),
                 secondary_y=False,
             )
 
-            # Area Entrate (Verde)
+            # Area Entrate (Asse Y2)
             fig_3.add_trace(
                 go.Scatter(x=h_data_3['Data_dt'], y=h_data_3['Entrate'], name="Entrate (€)",
                            fill='tozeroy', mode='none', fillcolor="rgba(40, 167, 69, 0.2)"),
                 secondary_y=True,
             )
 
-            # 4. FIX ASSE X: Forza il formato data e la pulizia visiva
+            # --- SOLUZIONE AL PROBLEMA DELL'ASSE X CONGESTIONATO ---
             fig_3.update_xaxes(
-                type='date',
-                tickformat="%d-%m",
-                dtick="D1", # Un segno per ogni giorno
-                tickangle=-45
+                type='date',           # Forza Plotly a interpretare l'asse come tempo lineare
+                tickformat="%d-%m",    # Mostra solo Giorno-Mese
+                dtick="D1",            # Forza un'etichetta al giorno per evitare sovrapposizioni
+                tickangle=-45          # Inclina le date per miglior leggibilità
             )
 
             fig_3.update_layout(
@@ -328,4 +328,4 @@ with tab3:
 
             st.plotly_chart(fig_3, use_container_width=True)
         else:
-            st.warning("Storico non trovato per questo prodotto.")
+            st.warning("Dati storici non trovati per questo prodotto.")
